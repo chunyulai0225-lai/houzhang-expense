@@ -2121,7 +2121,7 @@ function exportSignInExcel() {
       totalFee+=sub;
       xml+=`<Row ss:Height="26">${xlsCell(i+1,'sC','Number')}${xlsCell(ds,'sC')}${xlsCell(rec.classTime||'','sC')}${xlsCell(rate,'sC','Number')}${xlsCell(sessPerDay,'sC','Number')}${xlsCell(sub,'sC','Number')}${xlsCell('','sC')}</Row>`;
     });
-    xml+=`<Row ss:Height="26">${xlsCell('','sN')}${xlsCell('','sN')}${xlsCell('總計','sCB')}${xlsCell('','sN')}${xlsCell('','sN')}${xlsCell(totalFee,'sCB','Number')}${xlsCell('','sN')}</Row>`;
+    xml+=`<Row ss:Height="26">${xlsCell('','sN')}${xlsCell('','sN')}${xlsCell('總計','sCB')}${xlsCell('','sN')}${xlsCell(totalSess,'sCB','Number')}${xlsCell(totalFee,'sCB','Number')}${xlsCell('','sN')}</Row>`;
     xml+=`</Table></Worksheet>`;
   });
   xml+='</Workbook>';
