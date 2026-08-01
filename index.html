@@ -2617,7 +2617,7 @@ async function deleteAllStudents() {
   } catch(e) { alert('❌ 刪除失敗：' + e.message); }
 }
 
-let importStudentRows=[];
+importStudentRows=[];
 function showStudentImportModal() {
   setModal('📥 匯入學生資料',`
     <div class="alert alert-info">Excel 欄位：A編號、B班級、C姓名、D父、E母、F備註</div>
