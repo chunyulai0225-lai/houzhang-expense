@@ -2093,11 +2093,9 @@ function exportSignInExcel() {
       const teacherStr=(t?t.name:'')+(t2?'/'+t2.name:'');
       const infoStr=`授課班級：${rec.className}　　授課教師：${teacherStr}　　授課教室：${rec.classroom||''}`;
       const title=`苗栗縣后庄國小${yl}學年度${pn}學習扶助課程教師簽到表`;
-      // 每列 7 欄，合併格只放第一欄，其餘補空字串
-      const R=(cell)=>[cell,'',' ','  ','   ','    ','     '];
       const wsData=[
-        R(st(title,true,16,'center')),
-        R(st(infoStr,false,12,'left')),
+        [st(title,true,16,'center')],
+        [st(infoStr,false,12,'left')],
         ['編號','日期','授課時間','鐘點/節','節數','小計','教師簽到'].map(h=>st(h,true,12,'center',true))
       ];
       let totalFee=0;
@@ -2108,7 +2106,7 @@ function exportSignInExcel() {
       });
       wsData.push([st(''),st(''),st('總計',true,12,'center',true),st(''),st(''),num(totalFee,true),st('')]);
       const ws=XLSX.utils.aoa_to_sheet(wsData);
-      ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:6}},{s:{r:1,c:0},e:{r:1,c:6}}];
+
       ws['!cols']=[{wch:6},{wch:16},{wch:14},{wch:8},{wch:6},{wch:10},{wch:16}];
       ws['!rows']=[{hpt:36},{hpt:24},...Array(dates.length+2).fill({hpt:28})];
       const tName=t?t.name:'';
@@ -2138,10 +2136,9 @@ function exportAttendanceExcel() {
       const teacherStr=(t?t.name:'')+(t2?'/'+t2.name:'');
       const infoStr=`授課班級：${rec.className}　　授課教師：${teacherStr}　　授課教室：${rec.classroom||''}`;
       const COLS=6+dates.length;
-      const R=(cell)=>[cell,...Array(COLS-1).fill('')];
       const wsData=[
-        R(st(title,true,14,'center')),
-        R(st(infoStr,false,12,'left')),
+        [st(title,true,14,'center')],
+        [st(infoStr,false,12,'left')],
         ['編號','班級','姓名','父','母','備註',...dateHdrs].map(h=>st(h,true,11,'center',true)),
         ...students.map((s,i)=>[
           st(String(i+1),false,11,'center',true),
@@ -2154,7 +2151,7 @@ function exportAttendanceExcel() {
         ])
       ];
       const ws=XLSX.utils.aoa_to_sheet(wsData);
-      ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:COLS-1}},{s:{r:1,c:0},e:{r:1,c:COLS-1}}];
+
       ws['!cols']=[{wch:5},{wch:6},{wch:8},{wch:16},{wch:16},{wch:8},...dates.map(()=>({wch:6}))];
       ws['!rows']=[{hpt:26},{hpt:22},...Array(students.length+1).fill({hpt:22})];
       ws['!pageSetup']={orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0};
