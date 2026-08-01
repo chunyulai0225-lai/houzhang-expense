@@ -2095,7 +2095,7 @@ function exportSignInExcel() {
       const title=`苗栗縣后庄國小${yl}學年度${pn}學習扶助課程教師簽到表`;
       const wsData=[
         [st(title,true,16,'center')],
-        [st(infoStr,false,12,'left')],
+        [st(infoStr,false,12,'center')],
         ['編號','日期','授課時間','鐘點/節','節數','小計','教師簽到'].map(h=>st(h,true,12,'center',true))
       ];
       let totalFee=0;
@@ -2138,7 +2138,7 @@ function exportAttendanceExcel() {
       const COLS=6+dates.length;
       const wsData=[
         [st(title,true,14,'center')],
-        [st(infoStr,false,12,'left')],
+        [st(infoStr,false,12,'center')],
         ['編號','班級','姓名','父','母','備註',...dateHdrs].map(h=>st(h,true,11,'center',true)),
         ...students.map((s,i)=>[
           st(String(i+1),false,11,'center',true),
