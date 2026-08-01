@@ -1,0 +1,2112 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>后庄教學各項經費管理系統</title>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    :root {
+      --primary: #1B4F72;
+      --primary-light: #2874A6;
+      --primary-dark: #12344D;
+      --accent: #E67E22;
+      --success: #1E8449;
+      --danger: #C0392B;
+      --warning: #D4AC0D;
+      --bg: #EBF2F8;
+      --surface: #FFFFFF;
+      --border: #C9D9E8;
+      --text: #1A2A3A;
+      --text-muted: #5D7A8C;
+      --sidebar-w: 230px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Microsoft JhengHei', 'PingFang TC', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+
+    /* ===== LOGIN ===== */
+    #loginScreen {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(145deg, #12344D 0%, #1B4F72 50%, #2874A6 100%);
+    }
+    .login-card {
+      background: white; border-radius: 14px; padding: 44px 40px; width: 380px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.35);
+    }
+    .login-logo { text-align: center; font-size: 40px; margin-bottom: 12px; }
+    .login-card h1 { font-size: 19px; color: var(--primary); text-align: center; margin-bottom: 4px; }
+    .login-card .sub { font-size: 12px; color: var(--text-muted); text-align: center; margin-bottom: 32px; }
+    .login-error { color: var(--danger); font-size: 12px; margin-bottom: 10px; display: none; }
+
+    /* ===== LAYOUT ===== */
+    #mainApp { display: flex; min-height: 100vh; }
+    #sidebar {
+      width: var(--sidebar-w); background: var(--primary-dark); color: white;
+      position: fixed; top: 0; left: 0; height: 100vh; overflow-y: auto; z-index: 100;
+      display: flex; flex-direction: column;
+    }
+    .sidebar-head { padding: 18px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    .sidebar-head h2 { font-size: 14px; font-weight: 700; }
+    .sidebar-head p { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 2px; }
+    .sidebar-sel { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    .sidebar-sel select {
+      width: 100%; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+      color: white; border-radius: 6px; padding: 6px 8px; font-size: 12px; margin-bottom: 6px;
+      cursor: pointer; font-family: inherit;
+    }
+    .sidebar-sel select option { background: var(--primary-dark); }
+    .sidebar-nav { padding: 10px 8px; flex: 1; }
+    .nav-section { font-size: 10px; color: rgba(255,255,255,0.35); text-transform: uppercase;
+      letter-spacing: 0.8px; padding: 10px 8px 4px; }
+    .nav-item {
+      display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px;
+      cursor: pointer; font-size: 13px; color: rgba(255,255,255,0.72); transition: all 0.15s; margin-bottom: 2px;
+    }
+    .nav-item:hover { background: rgba(255,255,255,0.1); color: white; }
+    .nav-item.active { background: var(--accent); color: white; font-weight: 600; }
+    .nav-item .ico { font-size: 14px; min-width: 18px; }
+    #mainContent { margin-left: var(--sidebar-w); flex: 1; padding: 24px; }
+
+    /* ===== CARDS ===== */
+    .page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; gap: 12px; }
+    .page-title { font-size: 20px; font-weight: 700; }
+    .page-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+    .card { background: var(--surface); border-radius: 9px; border: 1px solid var(--border); padding: 20px; margin-bottom: 16px; }
+    .card-title { font-size: 14px; font-weight: 700; color: var(--primary); margin-bottom: 14px; }
+    .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .stat-card { background: var(--surface); border-radius: 9px; border: 1px solid var(--border); padding: 16px; text-align: center; }
+    .stat-val { font-size: 22px; font-weight: 800; color: var(--primary); }
+    .stat-lbl { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+    /* ===== TABLES ===== */
+    .tbl-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { background: #F0F6FC; color: var(--text-muted); font-weight: 700; font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.3px; padding: 9px 12px; text-align: left;
+      border-bottom: 2px solid var(--border); white-space: nowrap; }
+    td { padding: 9px 12px; border-bottom: 1px solid #E8F0F8; vertical-align: middle; }
+    tr:hover td { background: #F5F9FE; }
+    tr:last-child td { border-bottom: none; }
+    .tr-total td { background: #F0F6FC !important; font-weight: 700; border-top: 2px solid var(--border); }
+    .tr-section td { background: #E8F0F8 !important; font-weight: 700; color: var(--primary); }
+    .text-r { text-align: right !important; }
+    .text-c { text-align: center !important; }
+
+    /* ===== FORMS ===== */
+    .fg { margin-bottom: 14px; }
+    label { display: block; font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 5px; }
+    input, select, textarea {
+      width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px;
+      font-size: 13px; color: var(--text); background: white; font-family: inherit; transition: border 0.15s;
+    }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(27,79,114,0.1); }
+    input[type="number"] { text-align: right; }
+    .fr2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .fr3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+    /* ===== BUTTONS ===== */
+    .btn {
+      display: inline-flex; align-items: center; gap: 5px; padding: 8px 14px; border-radius: 7px;
+      font-size: 13px; font-weight: 700; cursor: pointer; border: none; transition: all 0.15s;
+      font-family: inherit; white-space: nowrap;
+    }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-light); }
+    .btn-secondary { background: #EAF0F8; color: var(--text); }
+    .btn-secondary:hover { background: var(--border); }
+    .btn-danger { background: var(--danger); color: white; }
+    .btn-danger:hover { background: #A93226; }
+    .btn-success { background: var(--success); color: white; }
+    .btn-accent { background: var(--accent); color: white; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 5px; }
+    .btn-full { width: 100%; justify-content: center; }
+
+    /* ===== BADGES ===== */
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+    .b-blue { background: #D6EAF8; color: #1A5276; }
+    .b-orange { background: #FDEBD0; color: #784212; }
+    .b-green { background: #D5F5E3; color: #1E8449; }
+    .b-gray { background: #EBF0F5; color: #4A6070; }
+    .b-red { background: #FADBD8; color: #922B21; }
+    .b-yellow { background: #FEF9E7; color: #7D6608; }
+
+    /* ===== ALERTS ===== */
+    .alert { padding: 11px 14px; border-radius: 7px; font-size: 13px; margin-bottom: 14px; line-height: 1.5; }
+    .alert-info { background: #D6EAF8; color: #1A5276; border-left: 3px solid #2874A6; }
+    .alert-warning { background: #FEF9E7; color: #7D6608; border-left: 3px solid #D4AC0D; }
+    .alert-success { background: #D5F5E3; color: #1E8449; border-left: 3px solid #27AE60; }
+    .alert-danger { background: #FADBD8; color: #922B21; border-left: 3px solid #C0392B; }
+
+    /* ===== MODAL ===== */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex;
+      align-items: center; justify-content: center; z-index: 999;
+    }
+    .modal { background: white; border-radius: 12px; width: 520px; max-width: 96vw; max-height: 88vh; overflow-y: auto; }
+    .modal-head { padding: 20px 20px 0; display: flex; justify-content: space-between; align-items: center; }
+    .modal-head-title { font-size: 16px; font-weight: 700; }
+    .modal-body { padding: 18px 20px; }
+    .modal-foot { padding: 0 20px 20px; display: flex; justify-content: flex-end; gap: 8px; }
+
+    /* ===== EMPTY STATE ===== */
+    .empty { text-align: center; padding: 40px; color: var(--text-muted); }
+    .empty .eico { font-size: 36px; margin-bottom: 8px; }
+    .empty p { font-size: 13px; }
+
+    /* ===== PRINT ===== */
+    @media print {
+      #loginScreen, #sidebar, .no-print { display: none !important; }
+      #mainContent { margin-left: 0 !important; padding: 8px !important; }
+      .card { border: 1px solid #ccc !important; box-shadow: none !important; break-inside: avoid; }
+      body, td, th, input { font-size: 12px !important; }
+      .btn { display: none !important; }
+      h2, h3, h4 { page-break-after: avoid; }
+      table { page-break-inside: auto; }
+      tr { page-break-inside: avoid; }
+    }
+
+    /* ===== TABS ===== */
+    .tabs { display: flex; gap: 2px; background: #E0EAF4; border-radius: 8px; padding: 3px; margin-bottom: 16px; }
+    .tab { flex: 1; padding: 7px; border-radius: 6px; text-align: center; cursor: pointer;
+      font-size: 12px; font-weight: 700; color: var(--text-muted); transition: all 0.15s; }
+    .tab.active { background: white; color: var(--primary); box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+
+    .divider { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+    .flex-row { display: flex; align-items: center; gap: 8px; }
+    .flex-between { display: flex; align-items: center; justify-content: space-between; }
+  </style>
+</head>
+<body>
+
+<!-- ===== LOGIN ===== -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">📚</div>
+    <h1>后庄教學各項經費管理系統</h1>
+    <p class="sub">后庄國民小學 教學組</p>
+    <div class="fg" style="margin-top:24px">
+      <label>系統密碼</label>
+      <input type="password" id="pwInput" placeholder="請輸入系統密碼">
+    </div>
+    <div class="login-error" id="pwError">密碼錯誤，請重試</div>
+    <button class="btn btn-primary btn-full" onclick="doLogin()">登入系統</button>
+  </div>
+</div>
+
+<!-- ===== MAIN APP ===== -->
+<div id="mainApp" style="display:none">
+  <aside id="sidebar">
+    <div class="sidebar-head">
+      <h2>📚 教學各項經費管理</h2>
+      <p>后庄國民小學</p>
+    </div>
+    <div class="sidebar-sel">
+      <select id="selYear" onchange="onYearChange()">
+        <option value="">— 選擇學年度 —</option>
+      </select>
+      <select id="selPeriod" onchange="onPeriodChange()">
+        <option value="">— 選擇期別 —</option>
+      </select>
+      <button class="btn btn-secondary btn-sm btn-full" style="margin-top:5px;font-size:11px" onclick="loadAllPeriodsAndShowMgr()">⚙ 管理學年度 / 期別</button>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">基本設定</div>
+      <div class="nav-item" data-page="students" onclick="go('students')"><span class="ico">👨‍👩‍👦</span>學生管理</div>
+      <div class="nav-item" data-page="teachers" onclick="go('teachers')"><span class="ico">👩‍🏫</span>教師主表</div>
+      <div class="nav-item" data-page="rates" onclick="go('rates')"><span class="ico">💰</span>費率設定</div>
+
+      <div class="nav-section">經費紀錄</div>
+      <div class="nav-item" data-page="classes" onclick="go('classes')"><span class="ico">📋</span>班級授課紀錄</div>
+      <div class="nav-item" data-page="supervision" onclick="go('supervision')"><span class="ico">👁</span>監考費</div>
+      <div class="nav-item" data-page="adminfee" onclick="go('adminfee')"><span class="ico">🎁</span>教師行政費</div>
+      <div class="nav-item" data-page="insurance" onclick="go('insurance')"><span class="ico">🏥</span>勞健保費</div>
+
+      <div class="nav-section">報表輸出</div>
+      <div class="nav-item" data-page="summary" onclick="go('summary')"><span class="ico">📊</span>期別總覽</div>
+      <div class="nav-item" data-page="signin" onclick="go('signin')"><span class="ico">✍</span>教師簽到表</div>
+      <div class="nav-item" data-page="attendance" onclick="go('attendance')"><span class="ico">📝</span>學生點名單</div>
+      <div class="nav-item" data-page="rpt-acct" onclick="go('rpt-acct')"><span class="ico">🖨</span>主計版報表</div>
+      <div class="nav-item" data-page="rpt-cash" onclick="go('rpt-cash')"><span class="ico">💳</span>出納版報表</div>
+
+      <div style="margin-top:16px; padding: 0 4px;">
+        <div class="nav-item" onclick="doLogout()"><span class="ico">🚪</span>登出</div>
+      </div>
+    </nav>
+  </aside>
+
+  <main id="mainContent">
+    <div id="pageContent"></div>
+  </main>
+</div>
+
+<!-- ===== MODAL ===== -->
+<div class="modal-overlay" id="modalBg" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-head-title" id="modalTitle"></div>
+      <button class="btn btn-secondary btn-sm" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+</div>
+
+<script>
+// ================================================================
+// FIREBASE 設定 — 請替換為您的 Firebase 專案 schoolclass-8214f 設定
+// ================================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyBBeLBBMG3bHkSYHu1eQOxQffqqspVoirA",
+  authDomain: "houzhang-expense.firebaseapp.com",
+  projectId: "houzhang-expense",
+  storageBucket: "houzhang-expense.firebasestorage.app",
+  messagingSenderId: "916840892883",
+  appId: "1:916840892883:web:c02af46d7e0aefecf84726"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ================================================================
+// 系統密碼（可自行修改）
+// ================================================================
+const SYS_PW = "justin40073";
+
+// ================================================================
+// 預設費率
+// ================================================================
+const DEF_RATES = {
+  inClass: 405,       // 課中鐘點費/節
+  afterSchool: 400,   // 課後鐘點費/節
+  summerWinter: 405,  // 暑假/寒假鐘點費/節
+  supervision: 405,   // 監考費/節
+  reward1: 200,       // 學生獎勵費（1節/週）
+  reward2: 400,       // 學生獎勵費（2節/週）
+  cleaning1: 100,     // 教室清潔費（1節/週）
+  cleaning2: 200      // 教室清潔費（2節/週）
+};
+
+const PERIOD_NAMES = { summer: '暑假期', first: '上學期', winter: '寒假期', second: '下學期' };
+const PERIOD_ORDER = { summer: 1, first: 2, winter: 3, second: 4 };
+
+// ================================================================
+// 應用程式狀態
+// ================================================================
+const S = {
+  page: 'teachers',
+  yearId: null,
+  periodId: null,
+  years: [],
+  periods: [],
+  teachers: [],
+  classRecords: [],
+  supervisionRecords: [],
+  adminFeeRecords: [],
+  vendorRecords: [],
+  insuranceRecords: [],
+  rates: { ...DEF_RATES },
+  periodData: null,
+  students: []
+};
+
+// ================================================================
+// 登入
+// ================================================================
+function doLogin() {
+  const pw = document.getElementById('pwInput').value;
+  if (pw === SYS_PW) {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('mainApp').style.display = 'flex';
+    appInit();
+  } else {
+    document.getElementById('pwError').style.display = 'block';
+  }
+}
+function doLogout() {
+  if (!confirm('確定要登出？')) return;
+  location.reload();
+}
+document.getElementById('pwInput').addEventListener('keypress', e => { if (e.key === 'Enter') doLogin(); });
+
+// ================================================================
+// 初始化
+// ================================================================
+async function appInit() {
+  await loadYears();
+  await loadTeachers();
+  await loadStudents();
+  go('teachers');
+}
+
+// ================================================================
+// 學年度 / 期別
+// ================================================================
+async function loadYears() {
+  const snap = await db.collection('schoolYears').orderBy('year', 'desc').get();
+  S.years = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  renderYearSel();
+}
+
+async function loadPeriods(yearId) {
+  const snap = await db.collection('periods').where('schoolYearId', '==', yearId).get();
+  S.periods = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  S.periods.sort((a, b) => (a.order||0) - (b.order||0));
+  renderPeriodSel();
+}
+
+function renderYearSel() {
+  const sel = document.getElementById('selYear');
+  sel.innerHTML = '<option value="">— 選擇學年度 —</option>';
+  S.years.forEach(y => sel.innerHTML += `<option value="${y.id}">${y.year}學年度</option>`);
+  if (S.yearId) sel.value = S.yearId;
+}
+
+function renderPeriodSel() {
+  const sel = document.getElementById('selPeriod');
+  sel.innerHTML = '<option value="">— 選擇期別 —</option>';
+  S.periods.forEach(p => sel.innerHTML += `<option value="${p.id}">${PERIOD_NAMES[p.type] || p.type}</option>`);
+  if (S.periodId) sel.value = S.periodId;
+}
+
+async function onYearChange() {
+  S.yearId = document.getElementById('selYear').value;
+  S.periodId = null; S.periods = []; S.periodData = null;
+  S.rates = { ...DEF_RATES };
+  clearPeriodData();
+  document.getElementById('selPeriod').innerHTML = '<option value="">— 選擇期別 —</option>';
+  if (S.yearId) await loadPeriods(S.yearId);
+  refresh();
+}
+
+async function onPeriodChange() {
+  S.periodId = document.getElementById('selPeriod').value;
+  clearPeriodData();
+  if (S.periodId) await loadPeriodData();
+  refresh();
+}
+
+function clearPeriodData() {
+  S.classRecords = []; S.supervisionRecords = []; S.adminFeeRecords = [];
+  S.vendorRecords = []; S.insuranceRecords = [];
+}
+
+async function loadPeriodData() {
+  const doc = await db.collection('periods').doc(S.periodId).get();
+  S.periodData = { id: doc.id, ...doc.data() };
+  S.rates = { ...DEF_RATES, ...(S.periodData.rates || {}) };
+  await Promise.all([
+    loadClassRecords(), loadSupervisionRecords(), loadAdminFeeRecords(),
+    loadVendorRecords(), loadInsuranceRecords()
+  ]);
+}
+
+// ================================================================
+// 學年度管理 Modal
+// ================================================================
+async function loadAllPeriodsAndShowMgr() {
+  try {
+    // 載入所有期別（不限學年度）
+    const snap = await db.collection('periods').get();
+    const allPeriods = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    allPeriods.sort((a,b) => (a.order||0)-(b.order||0));
+    // 合併進 S.periods（保留當前選擇的學年度資料）
+    S.periods = allPeriods;
+    showYearMgr();
+  } catch(e) {
+    alert('載入失敗：' + e.message);
+  }
+}
+
+function showYearMgr() {
+  const rows = S.years.map(y => {
+    // 從已載入的 S.periods 找出屬於這個學年度的期別
+    const ps = S.periods.filter(p => p.schoolYearId === y.id);
+    const pRows = ps.map(p => `
+      <div class="flex-between" style="padding:3px 0 3px 12px">
+        <span class="badge b-blue">${PERIOD_NAMES[p.type]||p.type}</span>
+        <button class="btn btn-danger btn-sm" style="padding:2px 8px;font-size:11px" onclick="deletePeriod('${p.id}','${y.id}')">刪除</button>
+      </div>`).join('');
+    return `
+    <div style="padding:10px 0;border-bottom:1px solid var(--border)">
+      <div class="flex-between" style="margin-bottom:${ps.length?'6px':'0'}">
+        <span style="font-weight:600">${y.year}學年度</span>
+        <button class="btn btn-secondary btn-sm" onclick="showAddPeriod('${y.id}','${y.year}')">＋ 新增期別</button>
+      </div>
+      ${pRows || '<div style="font-size:12px;color:var(--text-muted);padding-left:12px">尚無期別</div>'}
+    </div>`;
+  }).join('');
+  setModal('管理學年度與期別', `
+    <div class="fg">
+      <div class="card-title">新增學年度</div>
+      <div class="flex-row">
+        <input type="number" id="newYr" placeholder="例：115" style="flex:1">
+        <button class="btn btn-primary" onclick="addYear()">新增</button>
+      </div>
+    </div>
+    <hr class="divider">
+    <div class="card-title">現有學年度與期別</div>
+    ${rows || '<p class="text-muted" style="font-size:13px;padding:8px 0">尚無學年度，請新增</p>'}
+  `, `<button class="btn btn-secondary" onclick="closeModal()">關閉</button>`);
+}
+
+async function deletePeriod(periodId, yearId) {
+  if (!confirm('確定要刪除此期別？相關的所有紀錄也會一併刪除。')) return;
+  try {
+    // 刪除期別
+    await db.collection('periods').doc(periodId).delete();
+    // 刪除相關紀錄
+    const cols = ['classRecords','supervisionRecords','adminFeeRecords','vendorRecords','insuranceRecords'];
+    for (const col of cols) {
+      const snap = await db.collection(col).where('periodId','==',periodId).get();
+      for (const doc of snap.docs) await doc.ref.delete();
+    }
+    // 更新狀態
+    S.periods = S.periods.filter(p => p.id !== periodId);
+    if (S.periodId === periodId) { S.periodId = null; S.periodData = null; clearPeriodData(); }
+    if (S.yearId === yearId) renderPeriodSel();
+    showYearMgr();
+  } catch(e) {
+    alert('❌ 刪除失敗：' + e.message);
+  }
+}
+
+async function addYear() {
+  const yr = document.getElementById('newYr').value.trim();
+  if (!yr) return alert('請輸入學年度（例：115）');
+  if (S.years.find(y => y.year === yr)) return alert('此學年度已存在');
+  const btn = document.querySelector('#modalBody .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = '儲存中…'; }
+  try {
+    await db.collection('schoolYears').add({ year: yr, createdAt: ts() });
+    await loadYears();
+    showYearMgr();
+  } catch(e) {
+    alert('❌ 新增失敗：' + e.message + '\n\n請確認 Firebase 設定是否已填入正確的 API Key。');
+    if (btn) { btn.disabled = false; btn.textContent = '新增'; }
+  }
+}
+
+function showAddPeriod(yearId, yearLabel) {
+  const existing = S.periods.filter(p => p.schoolYearId === yearId).map(p => p.type);
+  const opts = Object.entries(PERIOD_NAMES).map(([v, n]) =>
+    `<option value="${v}" ${existing.includes(v) ? 'disabled' : ''}>${n}${existing.includes(v) ? '（已建立）' : ''}</option>`
+  ).join('');
+  setModal(`新增期別 — ${yearLabel}學年度`, `
+    <div class="fg">
+      <label>期別</label>
+      <select id="newPType">${opts}</select>
+    </div>
+    <div class="alert alert-info">新期別將套用目前的預設費率，建立後可至「費率設定」修改。</div>
+  `, `
+    <button class="btn btn-secondary" onclick="showYearMgr()">返回</button>
+    <button class="btn btn-primary" onclick="addPeriod('${yearId}')">建立期別</button>
+  `);
+}
+
+async function addPeriod(yearId) {
+  const type = document.getElementById('newPType').value;
+  if (!type) return alert('請選擇期別');
+  const btn = document.querySelector('#modalFoot .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = '儲存中…'; }
+  try {
+    await db.collection('periods').add({
+      schoolYearId: yearId, type, order: PERIOD_ORDER[type],
+      rates: { ...DEF_RATES }, approvedAmount: 0, approvalDoc: '', createdAt: ts()
+    });
+    // 如果目前選的學年度就是這個，立即更新側邊欄
+    if (S.yearId === yearId) {
+      await loadPeriods(yearId);
+    }
+    alert('✅ 期別新增成功！請從左側下拉選單選擇。');
+    closeModal();
+  } catch(e) {
+    alert('❌ 新增期別失敗：' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '建立期別'; }
+  }
+}
+
+// ================================================================
+// 教師主表
+// ================================================================
+async function loadTeachers() {
+  const snap = await db.collection('teachers').orderBy('name').get();
+  S.teachers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function saveTeacher(data, id) {
+  if (id) await db.collection('teachers').doc(id).update(data);
+  else await db.collection('teachers').add({ ...data, createdAt: ts() });
+  await loadTeachers();
+}
+
+async function delTeacher(id) {
+  if (!confirm('確定要刪除這位教師？刪除後相關紀錄可能無法顯示姓名。')) return;
+  await db.collection('teachers').doc(id).delete();
+  await loadTeachers();
+  refresh();
+}
+
+function renderTeachersPage() {
+  const rows = S.teachers.map(t => `
+    <tr>
+      <td><strong>${esc(t.name)}</strong></td>
+      <td class="text-muted">${esc(t.maskedName||'—')}</td>
+      <td><span class="badge ${(t.type==='現職'||t.type==='正式')?'b-blue':'b-orange'}">${t.type==='現職'||t.type==='正式'?'現職':'社會人士'}</span></td>
+      <td>${esc(t.outnaCode||'—')}</td>
+      <td>${(t.type==='現職'||t.type==='正式')?'<span class="badge b-green">$0（學校負擔）</span>':'<span class="badge b-gray">依期計算</span>'}</td>
+      <td>${esc(t.note||'')}</td>
+      <td class="no-print">
+        <button class="btn btn-secondary btn-sm" onclick="showTeacherModal('${t.id}')">編輯</button>
+        <button class="btn btn-danger btn-sm" onclick="delTeacher('${t.id}')">刪除</button>
+      </td>
+    </tr>`).join('');
+
+  pc(`
+    <div class="page-header">
+      <div><div class="page-title">👩‍🏫 教師主表</div><div class="page-sub">共 ${S.teachers.length} 位教師 · 所有期別共用</div></div>
+      <div class="flex-row no-print">
+        <button class="btn btn-secondary" onclick="showImportModal()">📥 匯入 Excel/CSV</button>
+        <button class="btn btn-primary" onclick="showTeacherModal()">＋ 新增教師</button>
+      </div>
+    </div>
+    <div class="alert alert-info">教師主表為全系統共用。出納代號由出納室提供後填入。現職教師勞健保費為零，社會人士（含代理代課）另於「勞健保費」頁面設定。</div>
+    <div class="card">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>姓名</th><th>系統顯示名稱（含O）</th><th>身份別</th><th>出納代號</th><th>勞健保</th><th>備註</th><th class="no-print">操作</th></tr></thead>
+          <tbody>${rows||`<tr><td colspan="7"><div class="empty"><div class="eico">👩‍🏫</div><p>尚無教師資料，請點右上角新增</p></div></td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`);
+}
+
+function showTeacherModal(id='') {
+  const t = id ? S.teachers.find(x=>x.id===id) : null;
+  setModal(id?'編輯教師':'新增教師', `
+    <div class="fg"><label>教師姓名 *</label><input type="text" id="t_name" value="${esc(t?.name||'')}" placeholder="例：王小明"></div>
+    <div class="fg"><label>系統遮蔽名稱（方便與系統下載資料比對）</label><input type="text" id="t_masked" value="${esc(t?.maskedName||'')}" placeholder="例：王O明"></div>
+    <div class="fr2">
+      <div class="fg"><label>身份別 *</label>
+        <select id="t_type">
+          <option value="現職" ${(t?.type==='現職'||t?.type==='正式')?'selected':''}>現職教師（正式）</option>
+          <option value="社會人士" ${(t?.type==='社會人士'||t?.type==='校外')?'selected':''}>社會人士（含代理代課）</option>
+        </select>
+      </div>
+      <div class="fg"><label>出納代號（由出納室提供）</label><input type="text" id="t_code" value="${esc(t?.outnaCode||'')}" placeholder="例：A001"></div>
+    </div>
+    <div class="fg"><label>備註</label><input type="text" id="t_note" value="${esc(t?.note||'')}" placeholder="例：英語科任"></div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="submitTeacher('${id}')">儲存</button>
+  `);
+}
+
+async function submitTeacher(id) {
+  const name = v('t_name');
+  if (!name) return alert('請填寫教師姓名');
+  await saveTeacher({ name, maskedName: v('t_masked'), type: v('t_type'), outnaCode: v('t_code'), note: v('t_note') }, id||null);
+  closeModal(); refresh();
+}
+
+// ================================================================
+// 教師匯入
+// ================================================================
+function showImportModal() {
+  setModal('📥 匯入教師資料', `
+    <div class="alert alert-info">
+      請準備 Excel 或 CSV 檔案，欄位順序如下：<br>
+      <strong>A欄：姓名</strong>（必填）、B欄：系統遮蔽名稱、C欄：身份別（正式／校外，預設正式）、D欄：出納代號、E欄：備註
+    </div>
+    <div class="fg">
+      <label>選擇檔案（.xlsx / .csv）</label>
+      <input type="file" id="importFile" accept=".xlsx,.xls,.csv" onchange="previewImport(this)">
+    </div>
+    <div id="importPreview"></div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-success" id="doImportBtn" style="display:none" onclick="doImport()">✅ 確認匯入</button>
+  `);
+}
+
+let importRows = [];
+
+function previewImport(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+
+  if (file.name.endsWith('.csv')) {
+    reader.onload = e => parseCSV(e.target.result);
+    reader.readAsText(file, 'UTF-8');
+  } else {
+    reader.onload = e => {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      processImportData(data);
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const data = lines.map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g, '')));
+  processImportData(data);
+}
+
+function processImportData(data) {
+  // 自動跳過標題列（第一列如果第一欄不像姓名就略過）
+  let startRow = 0;
+  if (data.length > 0) {
+    const first = String(data[0][0]||'');
+    if (first.includes('姓名') || first.includes('name') || first === '') startRow = 1;
+  }
+
+  importRows = [];
+  for (let i = startRow; i < data.length; i++) {
+    const row = data[i];
+    const name = String(row[0]||'').trim();
+    if (!name) continue;
+    const type = String(row[2]||'').trim();
+    importRows.push({
+      name,
+      maskedName: String(row[1]||'').trim(),
+      type: type === '校外' ? '校外' : '正式',
+      outnaCode: String(row[3]||'').trim(),
+      note: String(row[4]||'').trim()
+    });
+  }
+
+  const preview = document.getElementById('importPreview');
+  if (!importRows.length) {
+    preview.innerHTML = '<div class="alert alert-danger">未讀取到有效資料，請確認欄位格式。</div>';
+    document.getElementById('doImportBtn').style.display = 'none';
+    return;
+  }
+
+  const rows = importRows.map((r,i) => `
+    <tr>
+      <td>${i+1}</td>
+      <td><strong>${esc(r.name)}</strong></td>
+      <td>${esc(r.maskedName||'—')}</td>
+      <td><span class="badge ${r.type==='正式'?'b-blue':'b-orange'}">${r.type}</span></td>
+      <td>${esc(r.outnaCode||'—')}</td>
+      <td>${esc(r.note||'')}</td>
+    </tr>`).join('');
+
+  preview.innerHTML = `
+    <div class="alert alert-success">讀取到 ${importRows.length} 筆資料，確認後按「確認匯入」。</div>
+    <div class="tbl-wrap" style="max-height:280px;overflow-y:auto">
+      <table>
+        <thead><tr><th>#</th><th>姓名</th><th>遮蔽名稱</th><th>身份別</th><th>出納代號</th><th>備註</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  document.getElementById('doImportBtn').style.display = 'inline-flex';
+}
+
+async function doImport() {
+  if (!importRows.length) return;
+  const btn = document.getElementById('doImportBtn');
+  btn.disabled = true; btn.textContent = '匯入中…';
+  try {
+    let count = 0;
+    for (const row of importRows) {
+      // 檢查是否已存在相同姓名
+      const exists = S.teachers.find(t => t.name === row.name);
+      if (!exists) {
+        await db.collection('teachers').add({ ...row, createdAt: ts() });
+        count++;
+      }
+    }
+    await loadTeachers();
+    closeModal();
+    alert(`✅ 匯入完成！新增 ${count} 位教師${importRows.length - count > 0 ? `，跳過 ${importRows.length - count} 位（姓名已存在）` : ''}。`);
+    refresh();
+  } catch(e) {
+    alert('❌ 匯入失敗：' + e.message);
+    btn.disabled = false; btn.textContent = '✅ 確認匯入';
+  }
+}
+
+// ================================================================
+// 費率設定
+// ================================================================
+function renderRatesPage() {
+  if (!needPeriod()) return;
+  const r = S.rates; const pd = S.periodData;
+  const yl = S.years.find(y=>y.id===S.yearId)?.year||'';
+  pc(`
+    <div class="page-header">
+      <div><div class="page-title">💰 費率設定</div><div class="page-sub">${yl}學年度 ${PERIOD_NAMES[pd?.type]||''}</div></div>
+      <button class="btn btn-primary no-print" onclick="saveRates()">💾 儲存設定</button>
+    </div>
+    <div class="card">
+      <div class="card-title">📄 期別核定資訊</div>
+      <div class="fr2">
+        <div class="fg"><label>核定金額（元）</label><input type="number" id="r_approved" value="${pd?.approvedAmount||0}"></div>
+        <div class="fg"><label>核定公文文號</label><input type="text" id="r_docno" value="${esc(pd?.approvalDoc||'')}" placeholder="例：苗縣教字第1140012345號"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">🎓 鐘點費費率</div>
+      <div class="fr2">
+        <div class="fg"><label>課中鐘點費（元/節）</label><input type="number" id="r_inClass" value="${r.inClass}"></div>
+        <div class="fg"><label>課後鐘點費（元/節）</label><input type="number" id="r_afterSchool" value="${r.afterSchool}"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">☀ 暑假/寒假鐘點費費率</div>
+      <div class="fg" style="max-width:240px"><label>暑假/寒假鐘點費（元/節）</label><input type="number" id="r_summerWinter" value="${r.summerWinter||405}"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">👁 監考費費率</div>
+      <div class="fg" style="max-width:240px"><label>監考費（元/節）</label><input type="number" id="r_supervision" value="${r.supervision}"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">🎁 學生獎勵費 · 🧹 教室清潔費（元/班）</div>
+      <div class="alert alert-info" style="margin-bottom:12px">依各班每週上課節數套用對應級距。金額由主計確認後可隨時調整。</div>
+      <div class="fr2" style="margin-bottom:8px">
+        <div class="fg"><label>學生獎勵費 — 1節/週</label><input type="number" id="r_reward1" value="${r.reward1}"></div>
+        <div class="fg"><label>學生獎勵費 — 2節/週（含）以上</label><input type="number" id="r_reward2" value="${r.reward2}"></div>
+      </div>
+      <div class="fr2">
+        <div class="fg"><label>教室清潔費 — 1節/週</label><input type="number" id="r_cleaning1" value="${r.cleaning1}"></div>
+        <div class="fg"><label>教室清潔費 — 2節/週（含）以上</label><input type="number" id="r_cleaning2" value="${r.cleaning2}"></div>
+      </div>
+    </div>
+    <div class="alert alert-warning">修改費率後請點右上角「儲存設定」，變更才會生效並自動重新計算所有金額。</div>
+  `);
+}
+
+async function saveRates() {
+  const rates = {
+    inClass: num('r_inClass'), afterSchool: num('r_afterSchool'), summerWinter: num('r_summerWinter'),
+    supervision: num('r_supervision'),
+    reward1: num('r_reward1'), reward2: num('r_reward2'), cleaning1: num('r_cleaning1'), cleaning2: num('r_cleaning2')
+  };
+  const approvedAmount = num('r_approved');
+  const approvalDoc = v('r_docno');
+  await db.collection('periods').doc(S.periodId).update({ rates, approvedAmount, approvalDoc });
+  S.rates = rates;
+  S.periodData = { ...S.periodData, rates, approvedAmount, approvalDoc };
+  alert('✅ 費率設定已儲存');
+}
+
+// ================================================================
+// 班級授課紀錄
+// ================================================================
+async function loadClassRecords() {
+  if (!S.periodId) { S.classRecords = []; return; }
+  const snap = await db.collection('classRecords').where('periodId','==',S.periodId).get();
+  S.classRecords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  S.classRecords.sort((a,b) => (a.className||'').localeCompare(b.className||'', 'zh-TW'));
+}
+async function saveClassRecord(data, id) {
+  if (id) await db.collection('classRecords').doc(id).update(data);
+  else await db.collection('classRecords').add({ ...data, periodId: S.periodId, createdAt: ts() });
+  await loadClassRecords();
+}
+async function delClassRecord(id) {
+  if (!confirm('確定刪除此班級紀錄？')) return;
+  await db.collection('classRecords').doc(id).delete();
+  await loadClassRecords(); refresh();
+}
+
+function calcClassFee(rec) {
+  const r = S.rates;
+  const t1 = (rec.inClassSessions||0)*r.inClass + (rec.afterSchoolSessions||0)*r.afterSchool + (rec.summerWinterSessions||0)*(r.summerWinter||r.inClass);
+  const t2 = (rec.t2InClass||0)*r.inClass + (rec.t2AfterSchool||0)*r.afterSchool + (rec.t2SummerWinter||0)*(r.summerWinter||r.inClass);
+  return t1 + t2;
+}
+
+function renderClassesPage() {
+  if (!needPeriod()) return;
+  const rows = S.classRecords.map(rec => {
+    const t = getTch(rec.teacherId);
+    const t2 = rec.teacher2Id ? getTch(rec.teacher2Id) : null;
+    const rv = S.rates;
+    const swRate = rv.summerWinter || rv.inClass;
+    const fee1 = (rec.inClassSessions||0)*rv.inClass + (rec.afterSchoolSessions||0)*rv.afterSchool + (rec.summerWinterSessions||0)*swRate;
+    const fee2 = t2 ? (rec.t2InClass||0)*rv.inClass + (rec.t2AfterSchool||0)*rv.afterSchool + (rec.t2SummerWinter||0)*swRate : 0;
+    const tot1 = (rec.inClassSessions||0)+(rec.afterSchoolSessions||0)+(rec.summerWinterSessions||0);
+    const tot2 = (rec.t2InClass||0)+(rec.t2AfterSchool||0)+(rec.t2SummerWinter||0);
+    const editDelBtns = `<button class="btn btn-secondary btn-sm" onclick="showClassModal('${rec.id}')">編輯</button>
+        <button class="btn btn-secondary btn-sm" onclick="showEnrollModal('${rec.id}')">編班</button>
+        <button class="btn btn-secondary btn-sm" onclick="showDateManagerModal('${rec.id}')">日期</button>
+        <button class="btn btn-danger btn-sm" onclick="delClassRecord('${rec.id}')">刪除</button>`;
+    const sessionLabel = (inC, aft, sw) => {
+      const p = [];
+      if (inC>0) p.push('課中');
+      if (aft>0) p.push('課後');
+      if (sw>0) p.push('暑假');
+      return p.length ? p.join('＋') : '—';
+    };
+    const lbl1 = sessionLabel(rec.inClassSessions||0, rec.afterSchoolSessions||0, rec.summerWinterSessions||0);
+    const lbl2 = t2 ? sessionLabel(rec.t2InClass||0, rec.t2AfterSchool||0, rec.t2SummerWinter||0) : '';
+    const rows = [];
+    rows.push(`<tr>
+      <td><strong>${esc(rec.className)}</strong></td>
+      <td>${esc(rec.classroom||'')}</td>
+      <td>${t?esc(t.name):'—'}</td>
+      <td>${t?`<span class="badge ${(t.type==='現職'||t.type==='正式')?'b-blue':'b-orange'}">${(t.type==='現職'||t.type==='正式')?'現職':'社會人士'}</span>`:'—'}</td>
+      <td style="font-size:11px;white-space:nowrap">${rec.startDate||''}${rec.endDate&&rec.startDate?'<br>':''}${rec.endDate||''}</td>
+      <td>${lbl1}</td>
+      <td class="text-r"><strong>$${fee1.toLocaleString()}</strong></td>
+      <td>${esc(rec.note||'')}</td>
+      <td class="no-print" rowspan="${t2?2:1}">${editDelBtns}</td></tr>`);
+    if (t2) rows.push(`<tr>
+      <td><strong>${esc(rec.className)}</strong></td>
+      <td>${esc(rec.classroom||'')}</td>
+      <td>${esc(t2.name)}</td>
+      <td><span class="badge ${(t2.type==='現職'||t2.type==='正式')?'b-blue':'b-orange'}">${(t2.type==='現職'||t2.type==='正式')?'現職':'社會人士'}</span></td>
+      <td style="font-size:11px"></td>
+      <td>${lbl2}</td>
+      <td class="text-r"><strong>$${fee2.toLocaleString()}</strong></td>
+      <td></td></tr>`);
+    return rows.join('');
+  }).join('');
+
+  const tIn = S.classRecords.reduce((s,r)=>s+(r.inClassSessions||0),0);
+  const tAft = S.classRecords.reduce((s,r)=>s+(r.afterSchoolSessions||0),0);
+  const tSW = S.classRecords.reduce((s,r)=>s+(r.summerWinterSessions||0),0);
+  const tFee = S.classRecords.reduce((s,r)=>s+calcClassFee(r),0);
+
+  pc(`
+    <div class="page-header">
+      <div><div class="page-title">📋 班級授課紀錄</div><div class="page-sub">共 ${S.classRecords.length} 班 · 鐘點費合計 $${tFee.toLocaleString()}</div></div>
+      <button class="btn btn-primary no-print" onclick="showClassModal()">＋ 新增班級紀錄</button>
+    </div>
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-val">${tIn}</div><div class="stat-lbl">課中節數</div></div>
+      <div class="stat-card"><div class="stat-val">${tAft}</div><div class="stat-lbl">課後節數</div></div>
+      <div class="stat-card"><div class="stat-val">${tSW}</div><div class="stat-lbl">暑假/寒假節數</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:var(--success)">$${tFee.toLocaleString()}</div><div class="stat-lbl">鐘點費合計</div></div>
+    </div>
+    <div class="card">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>班級名稱</th><th>授課教室</th><th>授課教師</th><th>身份</th><th>上課起訖</th><th>期別</th><th class="text-r">鐘點費</th><th>備註</th><th class="no-print">操作</th></tr></thead>
+          <tbody>
+            ${rows||`<tr><td colspan="10"><div class="empty"><div class="eico">📋</div><p>尚無班級紀錄，請新增</p></div></td></tr>`}
+            ${S.classRecords.length?`<tr class="tr-total"><td colspan="5">合計</td><td></td><td class="text-r">$${tFee.toLocaleString()}</td><td colspan="2"></td></tr>`:''}
+          </tbody>
+        </table>
+      </div>
+    </div>`);
+}
+
+function showClassModal(id='') {
+  try {
+  const rec = id ? S.classRecords.find(x=>x.id===id) : null;
+  const tchOpts = S.teachers.map(t=>`<option value="${t.id}" ${rec?.teacherId===t.id?'selected':''}>${esc(t.name)}（${t.type}）</option>`).join('');
+  const hasT2 = !!(rec?.teacher2Id);
+  const t2Opts = S.teachers.map(t=>`<option value="${t.id}" ${rec?.teacher2Id===t.id?'selected':''}>${esc(t.name)}（${t.type}）</option>`).join('');
+  setModal(id?'編輯班級授課紀錄':'新增班級授課紀錄', `
+    <div class="fr2">
+      <div class="fg"><label>班級名稱 *</label><input type="text" id="c_name" value="${esc(rec?.className||'')}" placeholder="例：一年甲班（國語）"></div>
+      <div class="fg"><label>授課教室</label><input type="text" id="c_room" value="${esc(rec?.classroom||'')}" placeholder="例：自然教室、電腦教室"></div>
+    </div>
+    <div class="fg"><label>上課時間</label><input type="text" id="c_time" value="${esc(rec?.classTime||'')}" placeholder="例：8:50–12:10"></div>
+    <div class="fr2">
+      <div class="fg"><label>上課開始日期</label><input type="date" id="c_start" value="${rec?.startDate||''}"></div>
+      <div class="fg"><label>上課結束日期</label><input type="date" id="c_end" value="${rec?.endDate||''}"></div>
+    </div>
+    <div style="background:#F0F6FC;border-radius:8px;padding:14px;margin-bottom:12px">
+      <div style="font-weight:700;font-size:13px;margin-bottom:10px;color:var(--primary)">第一位教師</div>
+      <div class="fg"><label>授課教師 *</label><select id="c_tch"><option value="">請選擇教師</option>${tchOpts}</select></div>
+      <div class="fr3">
+        <div class="fg"><label>課中節數</label><input type="number" id="c_in" value="${rec?.inClassSessions||0}" min="0" oninput="updateFeePreview()"></div>
+        <div class="fg"><label>課後節數</label><input type="number" id="c_aft" value="${rec?.afterSchoolSessions||0}" min="0" oninput="updateFeePreview()"></div>
+        <div class="fg"><label>暑/寒假節數</label><input type="number" id="c_sw" value="${rec?.summerWinterSessions||0}" min="0" oninput="updateFeePreview()"></div>
+      </div>
+    </div>
+    <div id="t2_section" style="background:#F5F9FE;border-radius:8px;padding:14px;margin-bottom:12px;${hasT2?'':'display:none'}">
+      <div style="font-weight:700;font-size:13px;margin-bottom:10px;color:var(--primary)">第二位教師（共同授課）</div>
+      <div class="fg"><label>授課教師</label><select id="c_tch2"><option value="">請選擇教師</option>${t2Opts}</select></div>
+      <div class="fr3">
+        <div class="fg"><label>課中節數</label><input type="number" id="c_t2in" value="${rec?.t2InClass||0}" min="0" oninput="updateFeePreview()"></div>
+        <div class="fg"><label>課後節數</label><input type="number" id="c_t2aft" value="${rec?.t2AfterSchool||0}" min="0" oninput="updateFeePreview()"></div>
+        <div class="fg"><label>暑/寒假節數</label><input type="number" id="c_t2sw" value="${rec?.t2SummerWinter||0}" min="0" oninput="updateFeePreview()"></div>
+      </div>
+    </div>
+    <button type="button" class="btn btn-secondary btn-sm" id="addT2Btn" onclick="toggleT2()" style="${hasT2?'display:none':''}">＋ 新增第二位教師</button>
+    <button type="button" class="btn btn-danger btn-sm" id="removeT2Btn" onclick="toggleT2()" style="${hasT2?'':'display:none'}">✕ 移除第二位教師</button>
+    <div class="fg" style="margin-top:12px"><label>備註</label><input type="text" id="c_note" value="${esc(rec?.note||'')}"></div>
+    <div class="alert alert-info" style="margin-top:8px">
+      課中 $${S.rates.inClass}/節 · 課後 $${S.rates.afterSchool}/節 · 暑假/寒假 $${S.rates.summerWinter||S.rates.inClass}/節<br>
+      預估鐘點費：$<span id="feePreview">0</span>
+    </div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="submitClassRecord('${id}')">儲存</button>
+  `);
+  updateFeePreview();
+  } catch(e) { alert('showClassModal 錯誤：' + e.message + '\n' + e.stack); }
+}
+
+async function submitClassRecord(id) {
+  const className = v('c_name'); const teacherId = v('c_tch');
+  if (!className||!teacherId) return alert('請填寫班級名稱並選擇教師');
+  const t2Shown = document.getElementById('t2_section').style.display !== 'none';
+  const teacher2Id = t2Shown ? v('c_tch2') : '';
+  await saveClassRecord({
+    className, teacherId, classroom: v('c_room'), classTime: v('c_time'),
+    inClassSessions: num('c_in'), afterSchoolSessions: num('c_aft'), summerWinterSessions: num('c_sw'),
+    startDate: v('c_start'), endDate: v('c_end'), note: v('c_note'),
+    teacher2Id: teacher2Id||'',
+    t2InClass: t2Shown ? num('c_t2in') : 0,
+    t2AfterSchool: t2Shown ? num('c_t2aft') : 0,
+    t2SummerWinter: t2Shown ? num('c_t2sw') : 0,
+  }, id||null);
+  closeModal(); refresh();
+}
+
+function toggleT2() {
+  const sec = document.getElementById('t2_section');
+  const addBtn = document.getElementById('addT2Btn');
+  const rmBtn = document.getElementById('removeT2Btn');
+  const shown = sec.style.display !== 'none';
+  sec.style.display = shown ? 'none' : '';
+  addBtn.style.display = shown ? '' : 'none';
+  rmBtn.style.display = shown ? 'none' : '';
+  updateFeePreview();
+}
+
+function updateFeePreview() {
+  const r = S.rates;
+  const sw = r.summerWinter || r.inClass;
+  const t1 = (num('c_in')||0)*r.inClass + (num('c_aft')||0)*r.afterSchool + (num('c_sw')||0)*sw;
+  const t2Shown = document.getElementById('t2_section') && document.getElementById('t2_section').style.display !== 'none';
+  const t2 = t2Shown ? (num('c_t2in')||0)*r.inClass + (num('c_t2aft')||0)*r.afterSchool + (num('c_t2sw')||0)*sw : 0;
+  const el = document.getElementById('feePreview');
+  if (el) el.textContent = (t1+t2).toLocaleString();
+}
+
+// ================================================================
+// 監考費
+// ================================================================
+async function loadSupervisionRecords() {
+  if (!S.periodId) { S.supervisionRecords = []; return; }
+  const snap = await db.collection('supervisionRecords').where('periodId','==',S.periodId).get();
+  S.supervisionRecords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function saveSupervisionRecord(data, id) {
+  if (id) await db.collection('supervisionRecords').doc(id).update(data);
+  else await db.collection('supervisionRecords').add({ ...data, periodId: S.periodId, createdAt: ts() });
+  await loadSupervisionRecords();
+}
+async function delSupervisionRecord(id) {
+  if (!confirm('確定刪除此紀錄？')) return;
+  await db.collection('supervisionRecords').doc(id).delete();
+  await loadSupervisionRecords(); refresh();
+}
+
+function renderSupervisionPage() {
+  if (!needPeriod()) return;
+  const rows = S.supervisionRecords.map(rec => {
+    const t = getTch(rec.teacherId);
+    const fee = (rec.sessions||0)*S.rates.supervision;
+    return `<tr>
+      <td>${t?esc(t.name):'—'}</td>
+      <td>${t?`<span class="badge ${(t.type==='現職'||t.type==='正式')?'b-blue':'b-orange'}">${(t.type==='現職'||t.type==='正式')?'現職':'社會人士'}</span>`:'—'}</td>
+      <td class="text-r">${rec.sessions||0}</td>
+      <td class="text-r">$${S.rates.supervision}</td>
+      <td class="text-r"><strong>$${fee.toLocaleString()}</strong></td>
+      <td>${esc(rec.note||'')}</td>
+      <td class="no-print">
+        <button class="btn btn-secondary btn-sm" onclick="showSupervisionModal('${rec.id}')">編輯</button>
+        <button class="btn btn-danger btn-sm" onclick="delSupervisionRecord('${rec.id}')">刪除</button>
+      </td></tr>`;
+  }).join('');
+
+  const tSes = S.supervisionRecords.reduce((s,r)=>s+(r.sessions||0),0);
+  const tFee = tSes*S.rates.supervision;
+
+  pc(`
+    <div class="page-header">
+      <div><div class="page-title">👁 監考費</div><div class="page-sub">共 ${tSes} 節 · 合計 $${tFee.toLocaleString()}</div></div>
+      <button class="btn btn-primary no-print" onclick="showSupervisionModal()">＋ 新增監考紀錄</button>
+    </div>
+    <div class="card">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>監考教師</th><th>身份</th><th class="text-r">節數</th><th class="text-r">費率</th><th class="text-r">小計</th><th>備註</th><th class="no-print">操作</th></tr></thead>
+          <tbody>
+            ${rows||`<tr><td colspan="7"><div class="empty"><div class="eico">👁</div><p>尚無監考紀錄</p></div></td></tr>`}
+            ${S.supervisionRecords.length?`<tr class="tr-total"><td colspan="2">合計</td><td class="text-r">${tSes}</td><td></td><td class="text-r">$${tFee.toLocaleString()}</td><td colspan="2"></td></tr>`:''}
+          </tbody>
+        </table>
+      </div>
+    </div>`);
+}
+
+function showSupervisionModal(id='') {
+  const rec = id ? S.supervisionRecords.find(x=>x.id===id) : null;
+  const tchOpts = S.teachers.map(t=>`<option value="${t.id}" ${rec?.teacherId===t.id?'selected':''}>${esc(t.name)}（${t.type}）</option>`).join('');
+  setModal(id?'編輯監考紀錄':'新增監考紀錄', `
+    <div class="fg"><label>監考教師 *</label><select id="s_tch"><option value="">請選擇教師</option>${tchOpts}</select></div>
+    <div class="fg"><label>監考節數 *</label><input type="number" id="s_ses" value="${rec?.sessions||''}" min="1" placeholder="0"></div>
+    <div class="fg"><label>備註</label><input type="text" id="s_note" value="${esc(rec?.note||'')}" placeholder="例：期末評量監考"></div>
+    <div class="alert alert-info">監考費率：$${S.rates.supervision}/節</div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="submitSupervision('${id}')">儲存</button>
+  `);
+}
+
+async function submitSupervision(id) {
+  const teacherId = v('s_tch'); const sessions = num('s_ses');
+  if (!teacherId||!sessions) return alert('請選擇教師並填寫節數');
+  await saveSupervisionRecord({ teacherId, sessions, note: v('s_note') }, id||null);
+  closeModal(); refresh();
+}
+
+// ================================================================
+// 教師行政費
+// ================================================================
+async function loadAdminFeeRecords() {
+  if (!S.periodId) { S.adminFeeRecords = []; return; }
+  const snap = await db.collection('adminFeeRecords').where('periodId','==',S.periodId).get();
+  S.adminFeeRecords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function saveAdminFeeRecord(data, id) {
+  if (id) await db.collection('adminFeeRecords').doc(id).update(data);
+  else await db.collection('adminFeeRecords').add({ ...data, periodId: S.periodId, createdAt: ts() });
+  await loadAdminFeeRecords();
+}
+async function delAdminFeeRecord(id) {
+  if (!confirm('確定刪除此紀錄？')) return;
+  await db.collection('adminFeeRecords').doc(id).delete();
+  await loadAdminFeeRecords(); refresh();
+}
+
+function calcAdminFee(rec) {
+  if (rec.manualAmount !== null && rec.manualAmount !== undefined) return rec.manualAmount;
+  const pt = rec.periodType||'1';
+  if (pt==='暑假'||pt==='寒假') return 0; // 暑假/寒假需手動輸入
+  const wc = rec.weeklyCount||1;
+  if (rec.type==='獎勵費') return wc>=2 ? S.rates.reward2 : S.rates.reward1;
+  if (rec.type==='清潔費') return wc>=2 ? S.rates.cleaning2 : S.rates.cleaning1;
+  return 0;
+}
+
+function renderAdminFeePage() {
+  if (!needPeriod()) return;
+
+  // 從班級授課紀錄收集所有教師
+  const teacherMap = {};
+  S.classRecords.forEach(rec => {
+    [rec.teacherId, rec.teacher2Id].filter(Boolean).forEach(tid => {
+      if (!teacherMap[tid]) teacherMap[tid] = { teacher: getTch(tid), classes: [] };
+      if (!teacherMap[tid].classes.includes(rec.className)) teacherMap[tid].classes.push(rec.className);
+    });
+  });
+
+  const tag = r => {
+    if (!r) return '';
+    if (r.periodType==='暑假') return '暑假';
+    if (r.periodType==='寒假') return '寒假';
+    return (r.weeklyCount||1)+'節/週';
+  };
+
+  // 自動連動區塊
+  const autoRows = Object.entries(teacherMap).map(([tid, data]) => {
+    const t = data.teacher;
+    const rewardRec = S.adminFeeRecords.find(r => r.teacherId===tid && r.type==='獎勵費' && r.paymentMethod!=='逕付廠商');
+    const cleanRec  = S.adminFeeRecords.find(r => r.teacherId===tid && r.type==='清潔費' && r.paymentMethod!=='逕付廠商');
+    const rewardAmt = rewardRec ? calcAdminFee(rewardRec) : null;
+    const cleanAmt  = cleanRec  ? calcAdminFee(cleanRec)  : null;
+    return `<tr>
+      <td><strong>${t?esc(t.name):tid}</strong><br><span style="font-size:11px;color:var(--text-muted)">${data.classes.join('、')}</span></td>
+      <td>${t?`<span class="badge ${(t.type==='現職'||t.type==='正式')?'b-blue':'b-orange'}">${(t.type==='現職'||t.type==='正式')?'現職':'社會人士'}</span>`:'—'}</td>
+      <td class="text-r">${rewardAmt!==null?`$${rewardAmt.toLocaleString()} <span style="font-size:11px;color:var(--text-muted)">${tag(rewardRec)}</span>`:'<span class="text-muted" style="font-size:12px">未設定</span>'}</td>
+      <td class="text-r">${cleanAmt!==null?`$${cleanAmt.toLocaleString()} <span style="font-size:11px;color:var(--text-muted)">${tag(cleanRec)}</span>`:'<span class="text-muted" style="font-size:12px">未設定</span>'}</td>
+      <td class="no-print"><button class="btn btn-secondary btn-sm" onclick="showAdminFeeForTeacher('${tid}','${rewardRec?.id||''}','${cleanRec?.id||''}')">設定</button></td>
+    </tr>`;
+  }).join('');
+
+  // 手動新增區塊（逕付廠商等）
+  const manualRecs = S.adminFeeRecords.filter(r => r.paymentMethod==='逕付廠商' || !teacherMap[r.teacherId]);
+  const manualRows = manualRecs.map(rec => {
+    const t = getTch(rec.teacherId);
+    const amt = calcAdminFee(rec);
+    const isVendor = rec.paymentMethod==='逕付廠商';
+    return `<tr>
+      <td>${isVendor?esc(rec.vendorName||'—'):(t?esc(t.name):'—')}</td>
+      <td><span class="badge ${rec.type==='獎勵費'?'b-green':'b-blue'}">${rec.type}</span></td>
+      <td><span class="badge ${isVendor?'b-orange':'b-gray'}">${rec.paymentMethod||'教師墊付'}</span></td>
+      <td class="text-r"><strong>$${amt.toLocaleString()}</strong></td>
+      <td>${esc(rec.note||'')}</td>
+      <td class="no-print">
+        <button class="btn btn-secondary btn-sm" onclick="showAdminFeeModal('${rec.id}')">編輯</button>
+        <button class="btn btn-danger btn-sm" onclick="delAdminFeeRecord('${rec.id}')">刪除</button>
+      </td></tr>`;
+  }).join('');
+
+  const autoTotal = S.adminFeeRecords.filter(r=>teacherMap[r.teacherId]&&r.paymentMethod!=='逕付廠商').reduce((s,r)=>s+calcAdminFee(r),0);
+  const manualTotal = manualRecs.reduce((s,r)=>s+calcAdminFee(r),0);
+  const total = autoTotal+manualTotal;
+
+  pc(`
+    <div class="page-header">
+      <div><div class="page-title">🎁 教師行政費</div><div class="page-sub">合計 $${total.toLocaleString()}</div></div>
+      <button class="btn btn-primary no-print" onclick="showAdminFeeModal()">＋ 手動新增</button>
+    </div>
+    <div class="card">
+      <div class="card-title">從班級授課紀錄自動連動</div>
+      ${Object.keys(teacherMap).length===0?'<div class="alert alert-warning">班級授課紀錄尚無資料，請先至「班級授課紀錄」新增。</div>':''}
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>教師（授課班級）</th><th>身份</th><th class="text-r">學生獎勵費</th><th class="text-r">教室清潔費</th><th class="no-print">操作</th></tr></thead>
+          <tbody>${autoRows||'<tr><td colspan="5" class="text-c text-muted" style="padding:20px">無資料</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">其他手動新增（逕付廠商等）</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>教師 / 廠商</th><th>類別</th><th>付款方式</th><th class="text-r">金額</th><th>備註</th><th class="no-print">操作</th></tr></thead>
+          <tbody>${manualRows||'<tr><td colspan="6"><div class="empty"><div class="eico">🎁</div><p>尚無手動新增紀錄</p></div></td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`);
+}
+
+function showAdminFeeForTeacher(teacherId, rewardId, cleanId) {
+  const t = getTch(teacherId);
+  const rewardRec = rewardId ? S.adminFeeRecords.find(r=>r.id===rewardId) : null;
+  const cleanRec  = cleanId  ? S.adminFeeRecords.find(r=>r.id===cleanId)  : null;
+  const ptOpts = (cur) => ['1節/週','2節/週','暑假','寒假'].map(opt=>`<option value="${opt}" ${cur===opt?'selected':''}>${opt}</option>`).join('');
+  const rPT = rewardRec?.periodType || (rewardRec?.weeklyCount===2?'2節/週':'1節/週');
+  const cPT = cleanRec?.periodType  || (cleanRec?.weeklyCount===2?'2節/週':'1節/週');
+  setModal(`設定行政費 — ${t?.name||teacherId}`, `
+    <div style="background:#F0F6FC;border-radius:8px;padding:14px;margin-bottom:12px">
+      <div style="font-weight:700;margin-bottom:10px;color:var(--primary)">🎁 學生獎勵費</div>
+      <div class="fr2">
+        <div class="fg"><label>期型</label><select id="af_r_pt">${ptOpts(rPT)}</select></div>
+        <div class="fg"><label>金額（元）</label><input type="number" id="af_r_amt" value="${rewardRec?.manualAmount??''}" placeholder="暑假/寒假請填金額"></div>
+      </div>
+      <div class="fg"><label>付款方式</label><select id="af_r_pay"><option value="教師墊付" ${rewardRec?.paymentMethod!=='逕付廠商'?'selected':''}>教師墊付</option><option value="逕付廠商" ${rewardRec?.paymentMethod==='逕付廠商'?'selected':''}>逕付廠商</option></select></div>
+    </div>
+    <div style="background:#F5F9FE;border-radius:8px;padding:14px">
+      <div style="font-weight:700;margin-bottom:10px;color:var(--primary)">🧹 教室清潔費</div>
+      <div class="fr2">
+        <div class="fg"><label>期型</label><select id="af_c_pt">${ptOpts(cPT)}</select></div>
+        <div class="fg"><label>金額（元）</label><input type="number" id="af_c_amt" value="${cleanRec?.manualAmount??''}" placeholder="暑假/寒假請填金額"></div>
+      </div>
+      <div class="fg"><label>付款方式</label><select id="af_c_pay"><option value="教師墊付" ${cleanRec?.paymentMethod!=='逕付廠商'?'selected':''}>教師墊付</option><option value="逕付廠商" ${cleanRec?.paymentMethod==='逕付廠商'?'selected':''}>逕付廠商</option></select></div>
+    </div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="saveTeacherAdminFee('${teacherId}','${rewardId}','${cleanId}')">儲存</button>
+  `);
+}
+
+async function saveTeacherAdminFee(teacherId, rewardId, cleanId) {
+  const ptToWk = pt => pt==='2節/週'?2:1;
+  const makeData = (type, ptId, amtId, payId) => {
+    const pt = v(ptId); const amtVal = document.getElementById(amtId).value;
+    return { teacherId, type, paymentMethod: v(payId), periodType: pt,
+      weeklyCount: ptToWk(pt), manualAmount: amtVal!==''?parseFloat(amtVal):null };
+  };
+  try {
+    await saveAdminFeeRecord(makeData('獎勵費','af_r_pt','af_r_amt','af_r_pay'), rewardId||null);
+    await saveAdminFeeRecord(makeData('清潔費','af_c_pt','af_c_amt','af_c_pay'), cleanId||null);
+    closeModal(); refresh();
+  } catch(e) { alert('❌ 儲存失敗：'+e.message); }
+}
+
+function showAdminFeeModal(id='') {
+  const rec = id ? S.adminFeeRecords.find(x=>x.id===id) : null;
+  const tchOpts = S.teachers.map(t=>`<option value="${t.id}" ${rec?.teacherId===t.id?'selected':''}>${esc(t.name)}</option>`).join('');
+  const isVendorRec = rec?.paymentMethod === '逕付廠商';
+  setModal(id?'編輯行政費':'新增行政費', `
+    <div class="fr2">
+      <div class="fg"><label>費用類別 *</label>
+        <select id="af_type">
+          <option value="獎勵費" ${rec?.type==='獎勵費'?'selected':''}>🎁 學生獎勵費</option>
+          <option value="清潔費" ${rec?.type==='清潔費'?'selected':''}>🧹 教室清潔費</option>
+        </select>
+      </div>
+      <div class="fg"><label>付款方式 *</label>
+        <select id="af_pay" onchange="toggleAdminFeeFields()">
+          <option value="教師墊付" ${!isVendorRec?'selected':''}>教師墊付</option>
+          <option value="逕付廠商" ${isVendorRec?'selected':''}>逕付廠商</option>
+        </select>
+      </div>
+    </div>
+    <div id="af_teacher_row" style="${isVendorRec?'display:none':''}">
+      <div class="fg"><label>教師 *</label><select id="af_tch"><option value="">請選擇教師</option>${tchOpts}</select></div>
+      <div class="fg"><label>期型</label>
+        <select id="af_pt">
+          <option value="1節/週" ${(!rec?.periodType||rec?.periodType==='1節/週')?'selected':''}>1節/週</option>
+          <option value="2節/週" ${rec?.periodType==='2節/週'?'selected':''}>2節/週</option>
+          <option value="暑假" ${rec?.periodType==='暑假'?'selected':''}>暑假</option>
+          <option value="寒假" ${rec?.periodType==='寒假'?'selected':''}>寒假</option>
+        </select>
+      </div>
+    </div>
+    <div id="af_vendor_row" style="${isVendorRec?'':'display:none'}">
+      <div class="fg"><label>廠商名稱 *</label><input type="text" id="af_vendor" value="${esc(rec?.vendorName||'')}"></div>
+    </div>
+    <div class="fg"><label>手動金額（留空且選教師墊付時依費率自動計算）</label><input type="number" id="af_amt" value="${rec?.manualAmount??''}" placeholder="自動計算"></div>
+    <div class="fg"><label>備註</label><input type="text" id="af_note" value="${esc(rec?.note||'')}"></div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="submitAdminFee('${id}')">儲存</button>
+  `);
+}
+
+async function submitAdminFee(id) {
+  const type = v('af_type'); const paymentMethod = v('af_pay');
+  if (!type) return alert('請選擇費用類別');
+  const amtVal = document.getElementById('af_amt').value;
+  const pt = v('af_pt')||'1節/週';
+  let data = { type, paymentMethod, periodType: pt, weeklyCount: pt==='2節/週'?2:1, note: v('af_note'), manualAmount: amtVal!==''?parseFloat(amtVal):null };
+  if (paymentMethod === '逕付廠商') {
+    const vendorName = v('af_vendor');
+    if (!vendorName) return alert('請填寫廠商名稱');
+    data.vendorName = vendorName;
+    data.teacherId = '';
+    data.weeklyCount = 0;
+    if (amtVal === '') return alert('逕付廠商請填寫金額');
+    data.manualAmount = parseFloat(amtVal);
+  } else {
+    const teacherId = v('af_tch');
+    if (!teacherId) return alert('請選擇教師');
+    data.teacherId = teacherId;
+    data.weeklyCount = parseInt(v('af_wk'))||1;
+  }
+  await saveAdminFeeRecord(data, id||null);
+  closeModal(); refresh();
+}
+
+function toggleAdminFeeFields() {
+  const isVendor = document.getElementById('af_pay').value === '逕付廠商';
+  document.getElementById('af_teacher_row').style.display = isVendor ? 'none' : '';
+  document.getElementById('af_vendor_row').style.display = isVendor ? '' : 'none';
+}
+
+// ================================================================
+// 逕付廠商
+// ================================================================
+async function loadVendorRecords() {
+  if (!S.periodId) { S.vendorRecords = []; return; }
+  const snap = await db.collection('vendorRecords').where('periodId','==',S.periodId).get();
+  S.vendorRecords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function saveVendorRecord(data, id) {
+  if (id) await db.collection('vendorRecords').doc(id).update(data);
+  else await db.collection('vendorRecords').add({ ...data, periodId: S.periodId, createdAt: ts() });
+  await loadVendorRecords();
+}
+async function delVendorRecord(id) {
+  if (!confirm('確定刪除此紀錄？')) return;
+  await db.collection('vendorRecords').doc(id).delete();
+  await loadVendorRecords(); refresh();
+}
+
+function renderVendorPage() {
+  if (!needPeriod()) return;
+  const rows = S.vendorRecords.map(rec => `
+    <tr>
+      <td>${esc(rec.vendorName||'—')}</td>
+      <td>${esc(rec.description||'—')}</td>
+      <td class="text-r"><strong>$${(rec.amount||0).toLocaleString()}</strong></td>
+      <td>${esc(rec.note||'')}</td>
+      <td class="no-print">
+        <button class="btn btn-secondary btn-sm" onclick="showVendorModal('${rec.id}')">編輯</button>
+        <button class="btn btn-danger btn-sm" onclick="delVendorRecord('${rec.id}')">刪除</button>
+      </td></tr>`).join('');
+  const total = S.vendorRecords.reduce((s,r)=>s+(r.amount||0),0);
+
+  pc(`
+    <div class="page-header">
+      <div><div class="page-title">🏪 逕付廠商</div><div class="page-sub">合計 $${total.toLocaleString()}</div></div>
+      <button class="btn btn-primary no-print" onclick="showVendorModal()">＋ 新增廠商付款</button>
+    </div>
+    <div class="alert alert-info">廠商收據由老師帶回並製作憑證，送交您這邊後登錄於此。學校直接撥款給廠商，不經過教師。</div>
+    <div class="card">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>廠商名稱</th><th>品項說明</th><th class="text-r">金額</th><th>備註</th><th class="no-print">操作</th></tr></thead>
+          <tbody>
+            ${rows||`<tr><td colspan="5"><div class="empty"><div class="eico">🏪</div><p>尚無廠商付款紀錄</p></div></td></tr>`}
+            ${S.vendorRecords.length?`<tr class="tr-total"><td colspan="2">合計</td><td class="text-r">$${total.toLocaleString()}</td><td colspan="2"></td></tr>`:''}
+          </tbody>
+        </table>
+      </div>
+    </div>`);
+}
+
+function showVendorModal(id='') {
+  const rec = id ? S.vendorRecords.find(x=>x.id===id) : null;
+  setModal(id?'編輯廠商付款':'新增廠商付款', `
+    <div class="fr2">
+      <div class="fg"><label>廠商名稱 *</label><input type="text" id="v_vendor" value="${esc(rec?.vendorName||'')}"></div>
+      <div class="fg"><label>金額（元）*</label><input type="number" id="v_amt" value="${rec?.amount||''}"></div>
+    </div>
+    <div class="fg"><label>品項說明</label><input type="text" id="v_desc" value="${esc(rec?.description||'')}" placeholder="例：英語教材購置費"></div>
+    <div class="fg"><label>備註</label><input type="text" id="v_note" value="${esc(rec?.note||'')}"></div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="submitVendor('${id}')">儲存</button>
+  `);
+}
+
+async function submitVendor(id) {
+  const vendorName = v('v_vendor'); const amount = num('v_amt');
+  if (!vendorName||!amount) return alert('請填寫廠商名稱與金額');
+  await saveVendorRecord({ vendorName, amount, description: v('v_desc'), note: v('v_note') }, id||null);
+  closeModal(); refresh();
+}
+
+// ================================================================
+// 勞健保費
+// ================================================================
+async function loadInsuranceRecords() {
+  if (!S.periodId) { S.insuranceRecords = []; return; }
+  const snap = await db.collection('insuranceRecords').where('periodId','==',S.periodId).get();
+  S.insuranceRecords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function saveInsuranceRecord(data, id) {
+  if (id) await db.collection('insuranceRecords').doc(id).update(data);
+  else await db.collection('insuranceRecords').add({ ...data, periodId: S.periodId, createdAt: ts() });
+  await loadInsuranceRecords();
+}
+
+function renderInsurancePage() {
+  if (!needPeriod()) return;
+  const classTeacherIds = new Set();
+  S.classRecords.forEach(rec => {
+    if (rec.teacherId) classTeacherIds.add(rec.teacherId);
+    if (rec.teacher2Id) classTeacherIds.add(rec.teacher2Id);
+  });
+  const outside = S.teachers.filter(t => classTeacherIds.has(t.id));
+  const rows = outside.map(t => {
+    const rec = S.insuranceRecords.find(r=>r.teacherId===t.id);
+    const l = rec?.laborInsurance||0, p = rec?.laborPension||0, h = rec?.healthInsurance||0, s = rec?.suppHealth||0;
+    const tot = l+p+h+s;
+    return `<tr>
+      <td><strong>${esc(t.name)}</strong></td>
+      <td class="text-r">$${l.toLocaleString()}</td>
+      <td class="text-r">$${p.toLocaleString()}</td>
+      <td class="text-r">$${h.toLocaleString()}</td>
+      <td class="text-r">$${s.toLocaleString()}</td>
+      <td class="text-r"><strong>${tot>0?'$'+tot.toLocaleString():'—'}</strong></td>
+      <td>${esc(rec?.note||'')}</td>
+      <td class="no-print"><button class="btn btn-secondary btn-sm" onclick="showInsuranceModal('${t.id}')">設定</button></td>
+    </tr>`;
+  }).join('');
+  const totIns = S.insuranceRecords.reduce((s,r)=>s+(r.total||0),0);
+
+  pc(`
+    <div class="page-header">
+      <div><div class="page-title">🏥 勞健保費</div><div class="page-sub">合計 $${totIns.toLocaleString()}</div></div>
+    </div>
+    <div class="alert alert-info">現職教師僅需填寫二代健保補充保費，其餘欄位留 0 即可。社會人士（含代理代課）四欄均由出納計算後填入。</div>
+    <div class="card">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>教師姓名</th><th class="text-r">勞保費</th><th class="text-r">勞退金</th><th class="text-r">健保費</th><th class="text-r">二代健保補充保費</th><th class="text-r">合計</th><th>備註</th><th class="no-print">操作</th></tr></thead>
+          <tbody>
+            ${rows||`<tr><td colspan="7"><div class="empty"><div class="eico">🏥</div><p>尚無校外人士</p></div></td></tr>`}
+            ${outside.length?`<tr class="tr-total"><td>合計</td><td colspan="4"></td><td class="text-r">$${totIns.toLocaleString()}</td><td colspan="2"></td></tr>`:''}
+          </tbody>
+        </table>
+      </div>
+    </div>`);
+}
+
+function showInsuranceModal(teacherId) {
+  const t = getTch(teacherId);
+  const rec = S.insuranceRecords.find(r=>r.teacherId===teacherId);
+  setModal(`勞健保費設定 — ${t?.name||''}`, `
+    <div class="alert alert-info" style="margin-bottom:16px">由出納計算後提供，填入此處用於期末結算。</div>
+    <div class="fr2">
+      <div class="fg"><label>勞保費（元）</label><input type="number" id="ins_l" value="${rec?.laborInsurance||0}"></div>
+      <div class="fg"><label>勞退金（元）</label><input type="number" id="ins_p" value="${rec?.laborPension||0}"></div>
+    </div>
+    <div class="fr2">
+      <div class="fg"><label>健保費（元）</label><input type="number" id="ins_h" value="${rec?.healthInsurance||0}"></div>
+      <div class="fg"><label>二代健保補充保費（元）</label><input type="number" id="ins_s" value="${rec?.suppHealth||0}"></div>
+    </div>
+    <div class="fg"><label>備註</label><input type="text" id="ins_note" value="${esc(rec?.note||'')}" placeholder="例：學期初估算、學期末結算"></div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="submitInsurance('${teacherId}','${rec?.id||''}')">儲存</button>
+  `);
+}
+
+async function submitInsurance(teacherId, existId) {
+  const l = num('ins_l'), p = num('ins_p'), h = num('ins_h'), s = num('ins_s');
+  const data = { teacherId, laborInsurance: l, laborPension: p, healthInsurance: h, suppHealth: s, total: l+p+h+s, note: v('ins_note') };
+  await saveInsuranceRecord(data, existId||null);
+  closeModal(); refresh();
+}
+
+// ================================================================
+// Excel 匯出
+// ================================================================
+function exportAccountantExcel() {
+  const yl = S.years.find(y=>y.id===S.yearId)?.year||'';
+  const pn = PERIOD_NAMES[S.periodData?.type]||'';
+  const rv = S.rates; const swRate = rv.summerWinter||rv.inClass;
+  const swLabel = S.periodData?.type==='summer'?'暑假':S.periodData?.type==='winter'?'寒假':'暑/寒';
+  const wb = XLSX.utils.book_new();
+
+  // Sheet1：鐘點費
+  const hasInClass = S.classRecords.some(r=>(r.inClassSessions||0)>0||(r.t2InClass||0)>0);
+  const hasAfterSchool = S.classRecords.some(r=>(r.afterSchoolSessions||0)>0||(r.t2AfterSchool||0)>0);
+  const hasSW = S.classRecords.some(r=>(r.summerWinterSessions||0)>0||(r.t2SummerWinter||0)>0);
+  const swCol = S.periodData?.type==='summer'?'暑假節數':S.periodData?.type==='winter'?'寒假節數':'暑/寒節數';
+
+  const allRows = [];
+  S.classRecords.forEach(rec => {
+    if (rec.teacherId) allRows.push({ rec, tid: rec.teacherId, inC: rec.inClassSessions||0, aft: rec.afterSchoolSessions||0, sw: rec.summerWinterSessions||0 });
+    if (rec.teacher2Id) allRows.push({ rec, tid: rec.teacher2Id, inC: rec.t2InClass||0, aft: rec.t2AfterSchool||0, sw: rec.t2SummerWinter||0 });
+  });
+  allRows.sort((a,b)=>((getTch(a.tid)?.type==='現職'||getTch(a.tid)?.type==='正式')?0:1)-((getTch(b.tid)?.type==='現職'||getTch(b.tid)?.type==='正式')?0:1));
+
+  const classHeader = ['班級名稱','授課教室','授課教師','身份別','鐘點費'];
+  if (hasInClass) classHeader.push('課中節數');
+  if (hasAfterSchool) classHeader.push('課後節數');
+  if (hasSW) classHeader.push(swCol);
+  classHeader.push('總計金額','備註');
+
+  const classData = [classHeader, ...allRows.map(({rec,tid,inC,aft,sw})=>{
+    const t=getTch(tid);
+    const fee=inC*rv.inClass+aft*rv.afterSchool+sw*swRate;
+    const rSet = new Set();
+    if(inC>0) rSet.add(`$${rv.inClass}`);
+    if(aft>0) rSet.add(`$${rv.afterSchool}`);
+    if(sw>0) rSet.add(`$${swRate}`);
+    const rates = [...rSet];
+    const row=[rec.className,rec.classroom||'',t?t.name:'',t?(t.type==='現職'||t.type==='正式'?'現職':'社會人士'):'',rates.join('、')];
+    if(hasInClass) row.push(inC||'');
+    if(hasAfterSchool) row.push(aft||'');
+    if(hasSW) row.push(sw||'');
+    row.push(fee, rec.note||'');
+    return row;
+  })];
+  // 合計列
+  const totalRow = ['合計','','','',''];
+  if(hasInClass) totalRow.push(allRows.reduce((s,r)=>s+r.inC,0));
+  if(hasAfterSchool) totalRow.push(allRows.reduce((s,r)=>s+r.aft,0));
+  if(hasSW) totalRow.push(allRows.reduce((s,r)=>s+r.sw,0));
+  totalRow.push(allRows.reduce((s,{inC,aft,sw})=>s+inC*rv.inClass+aft*rv.afterSchool+sw*swRate,0),'');
+  classData.push(totalRow);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(classData), '鐘點費');
+
+  // Sheet2：監考費
+  const supSorted = [...S.supervisionRecords].sort((a,b)=>((getTch(a.teacherId)?.type==='現職'||getTch(a.teacherId)?.type==='正式')?0:1)-((getTch(b.teacherId)?.type==='現職'||getTch(b.teacherId)?.type==='正式')?0:1));
+  const supData = [['教師姓名','身份別','節數','費率','小計','備註'],
+    ...supSorted.map(rec=>{
+      const t=getTch(rec.teacherId); const fee=(rec.sessions||0)*rv.supervision;
+      return [t?t.name:'',t?(t.type==='現職'||t.type==='正式'?'現職':'社會人士'):'',rec.sessions||0,rv.supervision,fee,rec.note||''];
+    }),
+    ['合計','','','',(S.supervisionRecords.reduce((s,r)=>s+(r.sessions||0),0))*rv.supervision,'']
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(supData), '監考費');
+
+  // Sheet3：教師行政費
+  const adminData = [['教師/廠商','類別','期型','金額','備註'],
+    ...S.adminFeeRecords.map(rec=>{
+      const t=getTch(rec.teacherId); const isV=rec.paymentMethod==='逕付廠商';
+      return [isV?rec.vendorName||'':(t?t.name:''),rec.type,rec.periodType||'',calcAdminFee(rec),rec.note||''];
+    })
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(adminData), '教師行政費');
+
+  // Sheet4：勞健保費
+  const insTeachers = S.teachers.filter(t=>S.insuranceRecords.some(r=>r.teacherId===t.id)).sort((a,b)=>((a.type==='現職'||a.type==='正式')?0:1)-((b.type==='現職'||b.type==='正式')?0:1));
+  const insData = [['教師','勞保費','勞退金','健保費','二代健保補充保費','合計','備註'],
+    ...insTeachers.map(t=>{
+      const r2=S.insuranceRecords.find(r=>r.teacherId===t.id);
+      return [t.name,r2?.laborInsurance||0,r2?.laborPension||0,r2?.healthInsurance||0,r2?.suppHealth||0,r2?.total||0,r2?.note||''];
+    })
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(insData), '勞健保費');
+
+  XLSX.writeFile(wb, `${yl}學年度${pn}_主計版報表.xlsx`);
+}
+
+function exportCashierExcel() {
+  const yl = S.years.find(y=>y.id===S.yearId)?.year||'';
+  const pn = PERIOD_NAMES[S.periodData?.type]||'';
+  const rv = S.rates; const swRate = rv.summerWinter||rv.inClass;
+  const swLabel = S.periodData?.type==='summer'?'暑期':S.periodData?.type==='winter'?'寒期':'暑/寒期';
+
+  const map = {};
+  S.classRecords.forEach(rec => {
+    const add = (tid,inC,aft,sw) => {
+      if(!tid) return;
+      if(!map[tid]) map[tid]={inClass:0,afterSchool:0,summerWinter:0,_supFee:0};
+      map[tid].inClass+=inC; map[tid].afterSchool+=aft; map[tid].summerWinter+=sw;
+    };
+    add(rec.teacherId,rec.inClassSessions||0,rec.afterSchoolSessions||0,rec.summerWinterSessions||0);
+    add(rec.teacher2Id,rec.t2InClass||0,rec.t2AfterSchool||0,rec.t2SummerWinter||0);
+  });
+  S.supervisionRecords.forEach(rec=>{
+    if(!rec.teacherId) return;
+    if(!map[rec.teacherId]) map[rec.teacherId]={inClass:0,afterSchool:0,summerWinter:0,_supFee:0};
+    map[rec.teacherId]._supFee+=(rec.sessions||0)*rv.supervision;
+  });
+
+  const hasInClass = Object.values(map).some(d=>d.inClass>0);
+  const hasAfterSchool = Object.values(map).some(d=>d.afterSchool>0);
+  const hasSW = Object.values(map).some(d=>d.summerWinter>0);
+
+  const sorted = Object.entries(map).sort(([idA],[idB])=>{
+    const ta=getTch(idA),tb=getTch(idB);
+    return ((ta?.type==='現職'||ta?.type==='正式')?0:1)-((tb?.type==='現職'||tb?.type==='正式')?0:1);
+  });
+
+  const header = ['代號','教師姓名','身份別','鐘點費'];
+  if(hasInClass) header.push('課中節數');
+  if(hasAfterSchool) header.push('課後節數');
+  if(hasSW) header.push('授課節數');
+  header.push('總計');
+
+  const rows = sorted.map(([tid,d])=>{
+    const t=getTch(tid);
+    const total=d.inClass*rv.inClass+d.afterSchool*rv.afterSchool+d.summerWinter*swRate+(d._supFee||0);
+    const rates=[];
+    const rateSet = new Set();
+    if(d.inClass>0) rateSet.add(`$${rv.inClass}`);
+    if(d.afterSchool>0) rateSet.add(`$${rv.afterSchool}`);
+    if(d.summerWinter>0) rateSet.add(`$${swRate}`);
+    const row=[t?.outnaCode||'',t?t.name:'',t?(t.type==='現職'||t.type==='正式'?'現職':'社會人士'):'',[...rateSet].join('、')];
+    if(hasInClass) row.push(d.inClass||'');
+    if(hasAfterSchool) row.push(d.afterSchool||'');
+    if(hasSW) row.push(d.summerWinter||'');
+    row.push(total);
+    return row;
+  });
+
+  const grandTotal = sorted.reduce((s,[,d])=>s+(d.inClass*rv.inClass+d.afterSchool*rv.afterSchool+d.summerWinter*swRate+(d._supFee||0)),0);
+  const totalRow = ['合計','','',''];
+  if(hasInClass) totalRow.push('');
+  if(hasAfterSchool) totalRow.push('');
+  if(hasSW) totalRow.push('');
+  totalRow.push(grandTotal);
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([header,...rows,totalRow]), '鐘點費清冊');
+  XLSX.writeFile(wb, `${yl}學年度${pn}_出納版報表.xlsx`);
+}
+
+// ================================================================
+// 計算期別總計
+// ================================================================
+function calcTotals() {
+  const r = S.rates;
+  const tIn = S.classRecords.reduce((s,r2)=>s+(r2.inClassSessions||0),0);
+  const tAft = S.classRecords.reduce((s,r2)=>s+(r2.afterSchoolSessions||0),0);
+  const tSW = S.classRecords.reduce((s,r2)=>s+(r2.summerWinterSessions||0),0);
+  const classFee = tIn*r.inClass + tAft*r.afterSchool + tSW*(r.summerWinter||r.inClass);
+  const supFee = S.supervisionRecords.reduce((s,r2)=>s+(r2.sessions||0)*r.supervision,0);
+  const adminFee = S.adminFeeRecords.reduce((s,r2)=>s+calcAdminFee(r2),0);
+  const vendorFee = S.vendorRecords.reduce((s,r2)=>s+(r2.amount||0),0);
+  const insFee = S.insuranceRecords.reduce((s,r2)=>s+(r2.total||0),0);
+  const total = classFee+supFee+adminFee+vendorFee+insFee;
+  const approved = S.periodData?.approvedAmount||0;
+  return { tIn, tAft, classFee, supFee, adminFee, vendorFee, insFee, total, approved, balance: approved-total };
+}
+
+// ================================================================
+// 期別總覽
+// ================================================================
+function renderSummaryPage() {
+  if (!needPeriod()) return;
+  const t = calcTotals();
+  const yl = S.years.find(y=>y.id===S.yearId)?.year||'';
+  const pn = PERIOD_NAMES[S.periodData?.type]||'';
+  const pct = (n) => t.total>0 ? (n/t.total*100).toFixed(1)+'%' : '—';
+
+  pc(`
+    <div class="page-header">
+      <div><div class="page-title">📊 期別總覽</div><div class="page-sub">${yl}學年度 ${pn}</div></div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-val" style="color:var(--primary)">$${t.approved.toLocaleString()}</div><div class="stat-lbl">核定經費</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:var(--danger)">$${t.total.toLocaleString()}</div><div class="stat-lbl">總支出</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:${t.balance>=0?'var(--success)':'var(--danger)'}">$${Math.abs(t.balance).toLocaleString()}</div><div class="stat-lbl">${t.balance>=0?'結餘':'超支'}</div></div>
+    </div>
+    ${t.balance<0?'<div class="alert alert-danger">⚠ 目前支出已超過核定金額，請確認是否需要調整或追加申請。</div>':''}
+    ${t.balance>=0&&t.balance<1000?'<div class="alert alert-warning">⚠ 結餘極少，請再次確認各項費用是否正確。</div>':''}
+    <div class="card">
+      <div class="card-title">💸 支出明細</div>
+      <table>
+        <thead><tr><th>費用類別</th><th>說明</th><th class="text-r">金額</th><th class="text-r">佔比</th></tr></thead>
+        <tbody>
+          <tr><td>鐘點費（課中）</td><td>${t.tIn} 節 × $${S.rates.inClass}</td><td class="text-r">$${(t.tIn*S.rates.inClass).toLocaleString()}</td><td class="text-r text-muted">${pct(t.tIn*S.rates.inClass)}</td></tr>
+          <tr><td>鐘點費（課後）</td><td>${t.tAft} 節 × $${S.rates.afterSchool}</td><td class="text-r">$${(t.tAft*S.rates.afterSchool).toLocaleString()}</td><td class="text-r text-muted">${pct(t.tAft*S.rates.afterSchool)}</td></tr>
+          <tr><td>監考費</td><td></td><td class="text-r">$${t.supFee.toLocaleString()}</td><td class="text-r text-muted">${pct(t.supFee)}</td></tr>
+          <tr><td>教師行政費</td><td>獎勵費 ＋ 清潔費</td><td class="text-r">$${t.adminFee.toLocaleString()}</td><td class="text-r text-muted">${pct(t.adminFee)}</td></tr>
+          <tr><td>逕付廠商</td><td></td><td class="text-r">$${t.vendorFee.toLocaleString()}</td><td class="text-r text-muted">${pct(t.vendorFee)}</td></tr>
+          <tr><td>勞健保費</td><td>校外人士</td><td class="text-r">$${t.insFee.toLocaleString()}</td><td class="text-r text-muted">${pct(t.insFee)}</td></tr>
+          <tr class="tr-total"><td>總支出</td><td></td><td class="text-r">$${t.total.toLocaleString()}</td><td class="text-r">100%</td></tr>
+          <tr class="tr-total"><td>${t.balance>=0?'結餘':'超支'}</td><td></td><td class="text-r" style="color:${t.balance>=0?'var(--success)':'var(--danger)'}">$${Math.abs(t.balance).toLocaleString()}</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">📄 核定資訊</div>
+      <div class="fr2">
+        <div><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">核定公文文號</div><div>${esc(S.periodData?.approvalDoc||'（尚未填寫）')}</div></div>
+        <div><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">核定金額</div><div>$${(S.periodData?.approvedAmount||0).toLocaleString()}</div></div>
+      </div>
+    </div>`);
+}
+
+// ================================================================
+// 主計版報表
+// ================================================================
+function renderAccountantReport() {
+  if (!needPeriod()) return;
+  const T = calcTotals();
+  const yl = S.years.find(y=>y.id===S.yearId)?.year||'';
+  const pn = PERIOD_NAMES[S.periodData?.type]||'';
+  const rv = S.rates; const swRate = rv.summerWinter||rv.inClass;
+
+  // 決定要顯示哪些欄位
+  const hasInClass = S.classRecords.some(r=>(r.inClassSessions||0)>0||(r.t2InClass||0)>0);
+  const hasAfterSchool = S.classRecords.some(r=>(r.afterSchoolSessions||0)>0||(r.t2AfterSchool||0)>0);
+  const hasSW = S.classRecords.some(r=>(r.summerWinterSessions||0)>0||(r.t2SummerWinter||0)>0);
+  const swCol = S.periodData?.type==='summer'?'暑假節數':S.periodData?.type==='winter'?'寒假節數':'暑/寒節數';
+  const swLabel = S.periodData?.type==='summer'?'暑假':S.periodData?.type==='winter'?'寒假':'暑/寒';
+
+  // 收集所有教師列，現職排前
+  const allClassRows = [];
+  S.classRecords.forEach(rec => {
+    if (rec.teacherId) allClassRows.push({ rec, tid: rec.teacherId, inC: rec.inClassSessions||0, aft: rec.afterSchoolSessions||0, sw: rec.summerWinterSessions||0, note: rec.note||'' });
+    if (rec.teacher2Id) allClassRows.push({ rec, tid: rec.teacher2Id, inC: rec.t2InClass||0, aft: rec.t2AfterSchool||0, sw: rec.t2SummerWinter||0, note: '' });
+  });
+  allClassRows.sort((a,b)=>((getTch(a.tid)?.type==='現職'||getTch(a.tid)?.type==='正式')?0:1)-((getTch(b.tid)?.type==='現職'||getTch(b.tid)?.type==='正式')?0:1));
+
+  const classRows = allClassRows.map(({rec,tid,inC,aft,sw,note})=>{
+    const t=getTch(tid);
+    const fee=inC*rv.inClass+aft*rv.afterSchool+sw*swRate;
+    const rSet = new Set();
+    if(inC>0) rSet.add(`$${rv.inClass}`);
+    if(aft>0) rSet.add(`$${rv.afterSchool}`);
+    if(sw>0) rSet.add(`$${swRate}`);
+    const rates = [...rSet];
+    return `<tr>
+      <td>${esc(rec.className)}</td><td>${esc(rec.classroom||'')}</td>
+      <td>${t?esc(t.name):'—'}</td>
+      <td>${t?(t.type==='現職'||t.type==='正式'?'現職':'社會人士'):'—'}</td>
+      <td style="font-size:12px;line-height:1.6">${rates.join('<br>')}</td>
+      ${hasInClass?`<td class="text-r">${inC>0?inC:''}</td>`:''}
+      ${hasAfterSchool?`<td class="text-r">${aft>0?aft:''}</td>`:''}
+      ${hasSW?`<td class="text-r">${sw>0?sw:''}</td>`:''}
+      <td class="text-r"><strong>$${fee.toLocaleString()}</strong></td>
+      <td>${esc(note)}</td></tr>`;
+  }).join('');
+
+  const colCount = 5+(hasInClass?1:0)+(hasAfterSchool?1:0)+(hasSW?1:0)+2;
+
+  // 監考費：現職排前
+  const supSorted = [...S.supervisionRecords].sort((a,b)=>((getTch(a.teacherId)?.type==='現職'||getTch(a.teacherId)?.type==='正式')?0:1)-((getTch(b.teacherId)?.type==='現職'||getTch(b.teacherId)?.type==='正式')?0:1));
+  const supRows = supSorted.map(rec=>{
+    const t=getTch(rec.teacherId); const fee=(rec.sessions||0)*rv.supervision;
+    return `<tr><td>${t?esc(t.name):'—'}</td><td>${t?(t.type==='現職'||t.type==='正式'?'現職':'社會人士'):'—'}</td><td class="text-r">${rec.sessions||0}</td><td class="text-r">$${rv.supervision}</td><td class="text-r">$${fee.toLocaleString()}</td><td>${esc(rec.note||'')}</td></tr>`;
+  }).join('');
+
+  const adminRows = S.adminFeeRecords.map(rec=>{
+    const t2=getTch(rec.teacherId); const amt=calcAdminFee(rec); const isV=rec.paymentMethod==='逕付廠商';
+    return `<tr><td>${isV?esc(rec.vendorName||'—'):(t2?esc(t2.name):'—')}</td><td>${rec.type}</td><td class="text-c">${isV?'—':(rec.periodType||'1節/週')}</td><td class="text-r">$${amt.toLocaleString()}</td><td>${esc(rec.note||'')}</td></tr>`;
+  }).join('');
+
+  // 勞健保：現職排前
+  const insTeachers = S.teachers.filter(t=>S.insuranceRecords.some(r=>r.teacherId===t.id)).sort((a,b)=>((a.type==='現職'||a.type==='正式')?0:1)-((b.type==='現職'||b.type==='正式')?0:1));
+  const insRows = insTeachers.map(t=>{
+    const r2=S.insuranceRecords.find(r=>r.teacherId===t.id);
+    return `<tr><td>${esc(t.name)}</td><td class="text-r">$${(r2?.laborInsurance||0).toLocaleString()}</td><td class="text-r">$${(r2?.laborPension||0).toLocaleString()}</td><td class="text-r">$${(r2?.healthInsurance||0).toLocaleString()}</td><td class="text-r">$${(r2?.suppHealth||0).toLocaleString()}</td><td class="text-r">$${(r2?.total||0).toLocaleString()}</td><td>${esc(r2?.note||'')}</td></tr>`;
+  }).join('');
+
+  pc(`
+    <div class="page-header no-print">
+      <div><div class="page-title">🖨 主計版報表</div><div class="page-sub">完整明細，供主計室核銷用</div></div>
+      <div class="flex-row no-print">
+        <button class="btn btn-success" onclick="exportAccountantExcel()">📊 匯出 Excel</button>
+        <button class="btn btn-primary" onclick="window.print()">🖨 列印</button>
+      </div>
+    </div>
+    <div class="card">
+      <div style="text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid var(--border)">
+        <div style="font-size:17px;font-weight:800">后庄國民小學 學習扶助計畫</div>
+        <div style="font-size:14px;color:var(--text-muted);margin-top:4px">${yl}學年度 ${pn} 經費結算表</div>
+        ${S.periodData?.approvalDoc?`<div style="font-size:12px;color:var(--text-muted);margin-top:3px">核定文號：${esc(S.periodData.approvalDoc)}</div>`:''}
+      </div>
+
+      <h4 style="margin:0 0 8px;color:var(--primary)">一、鐘點費</h4>
+      <div class="tbl-wrap" style="margin-bottom:20px">
+        <table>
+          <thead><tr>
+            <th>班級名稱</th><th>授課教室</th><th>授課教師</th><th>身份別</th><th>鐘點費</th>
+            ${hasInClass?'<th class="text-r">課中節數</th>':''}
+            ${hasAfterSchool?'<th class="text-r">課後節數</th>':''}
+            ${hasSW?`<th class="text-r">${swCol}</th>`:''}
+            <th class="text-r">總計金額</th><th>備註</th>
+          </tr></thead>
+          <tbody>
+            ${classRows||'<tr><td colspan="9" class="text-c" style="color:gray">（無）</td></tr>'}
+            ${allClassRows.length?`<tr class="tr-total"><td colspan="${colCount-2}">小計</td><td class="text-r">$${T.classFee.toLocaleString()}</td><td></td></tr>`:''}
+          </tbody>
+        </table>
+      </div>
+
+      <h4 style="margin:0 0 8px;color:var(--primary)">二、監考費</h4>
+      <div class="tbl-wrap" style="margin-bottom:20px">
+        <table>
+          <thead><tr><th>教師姓名</th><th>身份別</th><th class="text-r">節數</th><th class="text-r">費率</th><th class="text-r">小計</th><th>備註</th></tr></thead>
+          <tbody>
+            ${supRows||'<tr><td colspan="6" class="text-c" style="color:gray">（無）</td></tr>'}
+            ${S.supervisionRecords.length?`<tr class="tr-total"><td colspan="2">小計</td><td class="text-r">${S.supervisionRecords.reduce((s,r)=>s+(r.sessions||0),0)}</td><td></td><td class="text-r">$${T.supFee.toLocaleString()}</td><td></td></tr>`:''}
+          </tbody>
+        </table>
+      </div>
+
+      <h4 style="margin:0 0 8px;color:var(--primary)">三、教師行政費</h4>
+      <div class="tbl-wrap" style="margin-bottom:20px">
+        <table>
+          <thead><tr><th>教師 / 廠商</th><th>類別</th><th class="text-c">期型</th><th class="text-r">金額</th><th>備註</th></tr></thead>
+          <tbody>
+            ${adminRows||'<tr><td colspan="5" class="text-c" style="color:gray">（無）</td></tr>'}
+            ${S.adminFeeRecords.length?`<tr class="tr-total"><td colspan="3">小計</td><td class="text-r">$${T.adminFee.toLocaleString()}</td><td></td></tr>`:''}
+          </tbody>
+        </table>
+      </div>
+
+      <h4 style="margin:0 0 8px;color:var(--primary)">四、勞健保費</h4>
+      <div class="tbl-wrap" style="margin-bottom:20px">
+        <table>
+          <thead><tr><th>教師</th><th class="text-r">勞保費</th><th class="text-r">勞退金</th><th class="text-r">健保費</th><th class="text-r">二代健保補充保費</th><th class="text-r">小計</th><th>備註</th></tr></thead>
+          <tbody>
+            ${insRows||'<tr><td colspan="7" class="text-c" style="color:gray">（無）</td></tr>'}
+            ${S.insuranceRecords.length?`<tr class="tr-total"><td colspan="5">小計</td><td class="text-r">$${T.insFee.toLocaleString()}</td><td></td></tr>`:''}
+          </tbody>
+        </table>
+      </div>
+
+      <div style="border-top:2px solid var(--primary);padding-top:14px;margin-top:8px">
+        <table style="width:auto;min-width:280px;margin-left:auto">
+          <tr><td style="padding:5px 16px 5px 0">核定金額</td><td class="text-r" style="padding:5px 0;font-weight:700">$${T.approved.toLocaleString()}</td></tr>
+          <tr><td style="padding:5px 16px 5px 0">鐘點費小計</td><td class="text-r" style="padding:5px 0">$${T.classFee.toLocaleString()}</td></tr>
+          <tr><td style="padding:5px 16px 5px 0">監考費小計</td><td class="text-r" style="padding:5px 0">$${T.supFee.toLocaleString()}</td></tr>
+          <tr><td style="padding:5px 16px 5px 0">教師行政費小計</td><td class="text-r" style="padding:5px 0">$${T.adminFee.toLocaleString()}</td></tr>
+          <tr><td style="padding:5px 16px 5px 0">勞健保費小計</td><td class="text-r" style="padding:5px 0">$${T.insFee.toLocaleString()}</td></tr>
+          <tr style="border-top:2px solid var(--border)">
+            <td style="padding:8px 16px 8px 0;font-weight:800;font-size:15px">總支出</td>
+            <td class="text-r" style="padding:8px 0;font-weight:800;font-size:15px;color:var(--danger)">$${T.total.toLocaleString()}</td>
+          </tr>
+          <tr>
+            <td style="padding:5px 16px 5px 0;font-weight:800;color:${T.balance>=0?'var(--success)':'var(--danger)'}">${T.balance>=0?'結餘':'超支'}</td>
+            <td class="text-r" style="padding:5px 0;font-weight:800;color:${T.balance>=0?'var(--success)':'var(--danger)'}">$${Math.abs(T.balance).toLocaleString()}</td>
+          </tr>
+        </table>
+      </div>
+    </div>`);
+}
+
+function renderCashierReport() {
+  if (!needPeriod()) return;
+  const yl = S.years.find(y=>y.id===S.yearId)?.year||'';
+  const pn = PERIOD_NAMES[S.periodData?.type]||'';
+  const rv = S.rates; const swRate = rv.summerWinter||rv.inClass;
+  const swLabel = S.periodData?.type==='summer'?'暑期':S.periodData?.type==='winter'?'寒期':'暑/寒期';
+
+  // 依教師彙總節數與費用
+  const map = {};
+  S.classRecords.forEach(rec => {
+    const add = (tid, inC, aft, sw) => {
+      if (!tid) return;
+      if (!map[tid]) map[tid] = { inClass:0, afterSchool:0, summerWinter:0 };
+      map[tid].inClass += inC;
+      map[tid].afterSchool += aft;
+      map[tid].summerWinter += sw;
+    };
+    add(rec.teacherId, rec.inClassSessions||0, rec.afterSchoolSessions||0, rec.summerWinterSessions||0);
+    add(rec.teacher2Id, rec.t2InClass||0, rec.t2AfterSchool||0, rec.t2SummerWinter||0);
+  });
+  S.supervisionRecords.forEach(rec => {
+    if (!rec.teacherId) return;
+    if (!map[rec.teacherId]) map[rec.teacherId] = { inClass:0, afterSchool:0, summerWinter:0 };
+    // 監考費計入總計但不佔節數欄
+    map[rec.teacherId]._supFee = (map[rec.teacherId]._supFee||0) + (rec.sessions||0)*rv.supervision;
+  });
+
+  // 決定顯示欄位
+  const hasInClass = Object.values(map).some(d=>d.inClass>0);
+  const hasAfterSchool = Object.values(map).some(d=>d.afterSchool>0);
+  const hasSW = Object.values(map).some(d=>d.summerWinter>0);
+
+  // 現職排前
+  const sorted = Object.entries(map).sort(([idA],[idB])=>{
+    const ta=getTch(idA),tb=getTch(idB);
+    return ((ta?.type==='現職'||ta?.type==='正式')?0:1)-((tb?.type==='現職'||tb?.type==='正式')?0:1);
+  });
+
+  const grandTotal = sorted.reduce(([,d])=>{
+    return (d.inClass*rv.inClass + d.afterSchool*rv.afterSchool + d.summerWinter*swRate + (d._supFee||0));
+  }, 0);
+  // 修正 reduce
+  const grandTotalAmt = sorted.reduce((s,[,d])=>s+(d.inClass*rv.inClass+d.afterSchool*rv.afterSchool+d.summerWinter*swRate+(d._supFee||0)),0);
+
+  const hasNoCode = sorted.some(([tid])=>!getTch(tid)?.outnaCode);
+
+  const rateCell = (d) => {
+    const rates = new Set();
+    if(d.inClass>0) rates.add(rv.inClass);
+    if(d.afterSchool>0) rates.add(rv.afterSchool);
+    if(d.summerWinter>0) rates.add(swRate);
+    return [...rates].map(r=>`$${r}`).join('<br>') || '—';
+  };
+
+  const rows = sorted.map(([tid, d]) => {
+    const t = getTch(tid);
+    const total = d.inClass*rv.inClass + d.afterSchool*rv.afterSchool + d.summerWinter*swRate + (d._supFee||0);
+    return `<tr>
+      <td>${t?.outnaCode?`<strong>${esc(t.outnaCode)}</strong>`:'<span style="color:var(--danger)">未設定</span>'}</td>
+      <td>${t?esc(t.name):'—'}</td>
+      <td>${t?`<span class="badge ${(t.type==='現職'||t.type==='正式')?'b-blue':'b-orange'}">${(t.type==='現職'||t.type==='正式')?'現職':'社會人士'}</span>`:'—'}</td>
+      <td style="font-size:12px;line-height:1.6">${rateCell(d)}</td>
+      ${hasInClass?`<td class="text-r">${d.inClass>0?d.inClass:''}</td>`:''}
+      ${hasAfterSchool?`<td class="text-r">${d.afterSchool>0?d.afterSchool:''}</td>`:''}
+      ${hasSW?`<td class="text-r">${d.summerWinter>0?d.summerWinter:''}</td>`:''}
+      <td class="text-r"><strong>$${total.toLocaleString()}</strong></td>
+    </tr>`;
+  }).join('');
+
+  const thCols = `<th>代號</th><th>教師姓名</th><th>身份別</th><th>鐘點費</th>${hasInClass?'<th class="text-r">課中節數</th>':''}${hasAfterSchool?'<th class="text-r">課後節數</th>':''}${hasSW?'<th class="text-r">授課節數</th>':''}<th class="text-r">總計</th>`;
+  const colCount = 4+(hasInClass?1:0)+(hasAfterSchool?1:0)+(hasSW?1:0)+1;
+
+  pc(`
+    <div class="page-header no-print">
+      <div><div class="page-title">💳 出納版報表</div><div class="page-sub">代號 · 姓名 · 節數 · 鐘點費</div></div>
+      <div class="flex-row no-print">
+        <button class="btn btn-success" onclick="exportCashierExcel()">📊 匯出 Excel</button>
+        <button class="btn btn-primary" onclick="window.print()">🖨 列印</button>
+      </div>
+    </div>
+    ${hasNoCode?'<div class="alert alert-warning no-print">⚠ 部分教師尚未設定出納代號，請至「教師主表」填入。</div>':''}
+    <div class="card">
+      <div style="text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid var(--border)">
+        <div style="font-size:17px;font-weight:800">后庄國民小學 學習扶助計畫</div>
+        <div style="font-size:14px;color:var(--text-muted);margin-top:4px">${yl}學年度 ${pn} 鐘點費清冊</div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>${thCols}</tr></thead>
+          <tbody>
+            ${rows||'<tr><td colspan="8" class="text-c" style="color:gray">尚無資料</td></tr>'}
+            ${sorted.length?`<tr class="tr-total"><td colspan="${colCount-1}">合計</td><td class="text-r">$${grandTotalAmt.toLocaleString()}</td></tr>`:''}
+          </tbody>
+        </table>
+      </div>
+    </div>`);
+}
+
+
+// ================================================================
+// 學生管理
+// ================================================================
+async function loadStudents() {
+  const snap = await db.collection('students').get();
+  S.students = snap.docs.map(d=>({id:d.id,...d.data()}));
+  S.students.sort((a,b)=>(a.originClass||'').localeCompare(b.originClass||'','zh-TW')||a.name.localeCompare(b.name,'zh-TW'));
+}
+async function saveStudent(data, id) {
+  if(id) await db.collection('students').doc(id).update(data);
+  else await db.collection('students').add({...data, createdAt:ts()});
+  await loadStudents();
+}
+async function delStudent(id) {
+  if(!confirm('確定刪除此學生？')) return;
+  await db.collection('students').doc(id).delete();
+  await loadStudents(); refresh();
+}
+function renderStudentsPage() {
+  const rows = S.students.map((s,i)=>`<tr>
+    <td>${esc(s.number||String(i+1).padStart(3,'0'))}</td><td>${esc(s.originClass||'')}</td>
+    <td><strong>${esc(s.name)}</strong></td><td>${esc(s.father||'')}</td><td>${esc(s.mother||'')}</td><td>${esc(s.note||'')}</td>
+    <td class="no-print"><button class="btn btn-secondary btn-sm" onclick="showStudentModal('${s.id}')">編輯</button> <button class="btn btn-danger btn-sm" onclick="delStudent('${s.id}')">刪除</button></td>
+  </tr>`).join('');
+  pc(`<div class="page-header">
+    <div><div class="page-title">👨‍👩‍👦 學生管理</div><div class="page-sub">共 ${S.students.length} 位學生</div></div>
+    <div class="flex-row no-print">
+      <button class="btn btn-secondary" onclick="downloadStudentTemplate()">📋 下載範本</button>
+      <button class="btn btn-secondary" onclick="showStudentImportModal()">📥 匯入 Excel</button>
+      <button class="btn btn-primary" onclick="showStudentModal()">＋ 新增學生</button>
+    </div></div>
+    <div class="card"><div class="tbl-wrap"><table>
+      <thead><tr><th>編號</th><th>班級</th><th>姓名</th><th>父</th><th>母</th><th>備註</th><th class="no-print">操作</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="7"><div class="empty"><div class="eico">👨‍👩‍👦</div><p>尚無學生，請匯入或手動新增</p></div></td></tr>'}</tbody>
+    </table></div></div>`);
+}
+function showStudentModal(id='') {
+  const s=id?S.students.find(x=>x.id===id):null;
+  setModal(id?'編輯學生':'新增學生',`
+    <div class="fr2"><div class="fg"><label>編號</label><input type="text" id="st_num" value="${esc(s?.number||'')}"></div>
+    <div class="fg"><label>班級（原班）</label><input type="text" id="st_cls" value="${esc(s?.originClass||'')}" placeholder="二甲"></div></div>
+    <div class="fg"><label>姓名 *</label><input type="text" id="st_name" value="${esc(s?.name||'')}"></div>
+    <div class="fr2"><div class="fg"><label>父</label><input type="text" id="st_fa" value="${esc(s?.father||'')}" placeholder="姓名 09xx-xxx-xxx"></div>
+    <div class="fg"><label>母</label><input type="text" id="st_mo" value="${esc(s?.mother||'')}" placeholder="姓名 09xx-xxx-xxx"></div></div>
+    <div class="fg"><label>備註</label><input type="text" id="st_note" value="${esc(s?.note||'')}"></div>`,`
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="submitStudent('${id}')">儲存</button>`);
+}
+async function submitStudent(id) {
+  const name=v('st_name'); if(!name) return alert('請填寫姓名');
+  await saveStudent({name,number:v('st_num'),originClass:v('st_cls'),father:v('st_fa'),mother:v('st_mo'),note:v('st_note')},id||null);
+  closeModal(); refresh();
+}
+let importStudentRows=[];
+function showStudentImportModal() {
+  setModal('📥 匯入學生資料',`
+    <div class="alert alert-info">Excel 欄位：A編號、B班級、C姓名、D父、E母、F備註</div>
+    <div class="fg"><label>選擇檔案（.xlsx / .csv）</label>
+    <input type="file" id="stFile" accept=".xlsx,.xls,.csv" onchange="previewStudentImport(this)"></div>
+    <div id="stPreview"></div>`,`
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-success" id="doStBtn" style="display:none" onclick="doStudentImport()">✅ 確認匯入</button>`);
+}
+function previewStudentImport(input) {
+  const file=input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  if(file.name.endsWith('.csv')){reader.onload=e=>processStudentData(e.target.result.split(/\r?\n/).filter(l=>l.trim()).map(l=>l.split(',').map(c=>c.trim().replace(/^"|"$/g,'')))); reader.readAsText(file,'UTF-8');}
+  else{reader.onload=e=>{const wb=XLSX.read(e.target.result,{type:'array'}); processStudentData(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''}));}; reader.readAsArrayBuffer(file);}
+}
+function processStudentData(data) {
+  let start=0; if(data.length>0){const f=String(data[0][0]||''); if(f.includes('編')||f.includes('號')||f==='') start=1;}
+  importStudentRows=data.slice(start).filter(r=>String(r[2]||'').trim()).map(r=>({number:String(r[0]||'').trim(),originClass:String(r[1]||'').trim(),name:String(r[2]||'').trim(),father:String(r[3]||'').trim(),mother:String(r[4]||'').trim(),note:String(r[5]||'').trim()}));
+  const prev=document.getElementById('stPreview');
+  if(!importStudentRows.length){prev.innerHTML='<div class="alert alert-danger">未讀取到有效資料</div>';document.getElementById('doStBtn').style.display='none';return;}
+  prev.innerHTML=`<div class="alert alert-success">讀取到 ${importStudentRows.length} 筆</div><div class="tbl-wrap" style="max-height:200px;overflow-y:auto"><table><thead><tr><th>編號</th><th>班級</th><th>姓名</th><th>父</th><th>母</th></tr></thead><tbody>${importStudentRows.map(s=>`<tr><td>${esc(s.number)}</td><td>${esc(s.originClass)}</td><td>${esc(s.name)}</td><td>${esc(s.father)}</td><td>${esc(s.mother)}</td></tr>`).join('')}</tbody></table></div>`;
+  document.getElementById('doStBtn').style.display='inline-flex';
+}
+async function doStudentImport() {
+  if(!importStudentRows.length) return;
+  const btn=document.getElementById('doStBtn'); btn.disabled=true; btn.textContent='匯入中…';
+  try{let count=0; for(const s of importStudentRows){if(!S.students.find(x=>x.name===s.name&&x.originClass===s.originClass)){await db.collection('students').add({...s,createdAt:ts()}); count++;}} await loadStudents(); closeModal(); alert(`✅ 新增 ${count} 位，跳過 ${importStudentRows.length-count} 位`); refresh();}
+  catch(e){alert('❌ '+e.message); btn.disabled=false; btn.textContent='✅ 確認匯入';}
+}
+function downloadStudentTemplate() {
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['編號','班級','姓名','父','母','備註'],['001','二甲','王小明','王爸爸 0912-345-678','王媽媽 0912-345-678','']]),'學生名單');
+  XLSX.writeFile(wb,'學生名單範本.xlsx');
+}
+// ================================================================
+// 編班
+// ================================================================
+function showEnrollModal(classRecordId) {
+  const rec=S.classRecords.find(r=>r.id===classRecordId); if(!rec) return;
+  const enrolled=rec.enrolledStudentIds||[];
+  const rows=S.students.map(s=>`<label class="strow" style="display:flex;align-items:center;gap:8px;padding:7px;border-bottom:1px solid var(--border);cursor:pointer"><input type="checkbox" value="${s.id}" ${enrolled.includes(s.id)?'checked':''} style="width:auto;min-width:16px"><strong>${esc(s.name)}</strong><span style="font-size:12px;color:var(--text-muted)">${esc(s.originClass||'')}</span></label>`).join('');
+  setModal(`編班 — ${esc(rec.className)}`,`
+    <div class="fg"><input type="text" id="enrollSearch" placeholder="搜尋..." oninput="filterEnroll()"></div>
+    <div id="enrollList" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">${rows||'<p class="text-muted" style="padding:12px">請先至學生管理新增學生</p>'}</div>
+    <div style="margin-top:8px;font-size:12px;color:var(--text-muted)">已選 <span id="enrollCnt">${enrolled.length}</span> 位</div>`,`
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="submitEnrollment('${classRecordId}')">儲存</button>`);
+  setTimeout(()=>{document.querySelectorAll('#enrollList input').forEach(cb=>cb.addEventListener('change',()=>{document.getElementById('enrollCnt').textContent=document.querySelectorAll('#enrollList input:checked').length;}));},100);
+}
+function filterEnroll() {
+  const q=(document.getElementById('enrollSearch')?.value||'').toLowerCase();
+  document.querySelectorAll('#enrollList .strow').forEach(row=>{const name=row.querySelector('strong')?.textContent?.toLowerCase()||''; const cls=row.querySelector('span')?.textContent?.toLowerCase()||''; row.style.display=(name.includes(q)||cls.includes(q))?'':'none';});
+}
+async function submitEnrollment(classRecordId) {
+  const checked=[...document.querySelectorAll('#enrollList input:checked')].map(cb=>cb.value);
+  try{await db.collection('classRecords').doc(classRecordId).update({enrolledStudentIds:checked}); const rec=S.classRecords.find(r=>r.id===classRecordId); if(rec) rec.enrolledStudentIds=checked; closeModal(); refresh();}
+  catch(e){alert('❌ '+e.message);}
+}
+// ================================================================
+// 上課日期管理
+// ================================================================
+function getWeekdaysInRange(s,e){
+  const dates=[],end=new Date(e+'T00:00:00');
+  for(let d=new Date(s+'T00:00:00');d<=end;d.setDate(d.getDate()+1)){
+    if(d.getDay()&&d.getDay()!==6){
+      const yr=d.getFullYear(),mo=String(d.getMonth()+1).padStart(2,'0'),dy=String(d.getDate()).padStart(2,'0');
+      dates.push(`${yr}-${mo}-${dy}`);
+    }
+  }
+  return dates;
+}
+function showDateManagerModal(classRecordId) {
+  const rec=S.classRecords.find(r=>r.id===classRecordId); if(!rec) return;
+  const existing=rec.classDates||[];
+  const DN=['日','一','二','三','四','五','六'];
+  let body='';
+  if((S.periodData?.type==='summer'||S.periodData?.type==='winter')&&rec.startDate&&rec.endDate){
+    const all=getWeekdaysInRange(rec.startDate,rec.endDate);
+    body='<div class="alert alert-info">依起訖日期自動產生平日，請勾選實際上課日期</div><div style="display:flex;flex-wrap:wrap;gap:6px">'+all.map(d=>{const dt=new Date(d+'T00:00:00');return `<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:#F0F6FC;border-radius:6px;cursor:pointer;font-size:13px"><input type="checkbox" class="dChk" value="${d}" style="width:auto" ${existing.includes(d)?'checked':''}>${dt.getMonth()+1}/${dt.getDate()}（週${DN[dt.getDay()]}）</label>`;}).join('')+'</div>';
+  } else {
+    const list=existing.map(d=>{const dt=new Date(d+'T00:00:00');return `<div data-date="${d}" style="display:flex;align-items:center;justify-content:space-between;padding:6px;border-bottom:1px solid var(--border)"><span>${dt.getMonth()+1}/${dt.getDate()}（週${DN[dt.getDay()]}）</span><button class="btn btn-danger btn-sm" onclick="this.closest('[data-date]').remove()">✕</button></div>`;}).join('');
+    body=`<div class="flex-row fg"><input type="date" id="newDP" style="flex:1"><button class="btn btn-primary btn-sm" onclick="addDateItem()">新增</button></div><div id="dateList">${list}</div>`;
+  }
+  setModal(`上課日期 — ${esc(rec.className)}`,body,`<button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="submitDates('${classRecordId}')">儲存</button>`);
+}
+function addDateItem(){const dp=document.getElementById('newDP');if(!dp?.value)return;const d=dp.value,dt=new Date(d+'T00:00:00'),DN=['日','一','二','三','四','五','六'],dl=document.getElementById('dateList');if(dl.querySelector(`[data-date="${d}"]`))return;const div=document.createElement('div');div.setAttribute('data-date',d);div.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:6px;border-bottom:1px solid var(--border)';div.innerHTML=`<span>${dt.getMonth()+1}/${dt.getDate()}（週${DN[dt.getDay()]}）</span><button class="btn btn-danger btn-sm" onclick="this.closest('[data-date]').remove()">✕</button>`;dl.appendChild(div);dp.value='';}
+async function submitDates(classRecordId){let dates;const chks=document.querySelectorAll('.dChk');if(chks.length>0){dates=[...chks].filter(c=>c.checked).map(c=>c.value);}else{dates=[...document.querySelectorAll('#dateList [data-date]')].map(el=>el.dataset.date);}dates.sort();try{await db.collection('classRecords').doc(classRecordId).update({classDates:dates});const rec=S.classRecords.find(r=>r.id===classRecordId);if(rec)rec.classDates=dates;closeModal();refresh();}catch(e){alert('❌ '+e.message);}}
+// ================================================================
+// 教師簽到表
+// ================================================================
+function renderSignInPage(){if(!needPeriod())return;const yl=S.years.find(y=>y.id===S.yearId)?.year||'',pn=PERIOD_NAMES[S.periodData?.type]||'';const rows=S.classRecords.map(rec=>{const t=getTch(rec.teacherId),t2=rec.teacher2Id?getTch(rec.teacher2Id):null,dates=rec.classDates||[];return `<tr><td><strong>${esc(rec.className)}</strong></td><td>${t?esc(t.name):'—'}${t2?'<br><span style="font-size:12px;color:var(--text-muted)">'+esc(t2.name)+'</span>':''}</td><td>${esc(rec.classroom||'')}</td><td>${esc(rec.classTime||'—')}</td><td class="text-c"><span class="badge ${dates.length?'b-green':'b-gray'}">${dates.length} 天</span></td><td class="no-print"><button class="btn btn-secondary btn-sm" onclick="showDateManagerModal('${rec.id}')">設定日期</button></td></tr>`;}).join('');pc(`<div class="page-header"><div><div class="page-title">✍ 教師簽到表</div><div class="page-sub">${yl}學年度 ${pn}</div></div><button class="btn btn-success no-print" onclick="exportSignInExcel('${yl}','${pn}')">📊 匯出 Excel</button></div><div class="alert alert-info no-print">請先確認各班日期已設定，每班各一張工作表。</div><div class="card"><div class="tbl-wrap"><table><thead><tr><th>班別</th><th>授課教師</th><th>教室</th><th>上課時間</th><th class="text-c">已設定日期</th><th class="no-print">操作</th></tr></thead><tbody>${rows||'<tr><td colspan="6"><div class="empty"><div class="eico">✍</div><p>尚無班級授課紀錄</p></div></td></tr>'}</tbody></table></div></div>`);}
+function exportSignInExcel(yl,pn){const KT='標楷體',bd={top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};const kc=(v,bold=false,sz=12,align='center',border=true)=>({v:v===null||v===undefined?'':v,t:typeof v==='number'?'n':'s',s:{font:{name:KT,sz,bold},alignment:{horizontal:align,vertical:'center',wrapText:true},border:border?bd:undefined}});const wb=XLSX.utils.book_new(),DN=['日','一','二','三','四','五','六'],rv=S.rates,swRate=rv.summerWinter||rv.inClass;S.classRecords.forEach(rec=>{const dates=(rec.classDates||[]).slice().sort(),t=getTch(rec.teacherId),t2=rec.teacher2Id?getTch(rec.teacher2Id):null,totalSess=(rec.inClassSessions||0)+(rec.afterSchoolSessions||0)+(rec.summerWinterSessions||0),sessPerDay=dates.length>0?Math.round(totalSess/dates.length):0,rate=(rec.summerWinterSessions||0)>0?swRate:((rec.afterSchoolSessions||0)>0?rv.afterSchool:rv.inClass),teacherStr=(t?t.name:'')+(t2?'/'+t2.name:''),title=`苗栗縣后庄國小${yl}學年度${pn}學習扶助課程教師簽到表`;const data=[[kc(title,true,16,'center',false)],[kc('')],[kc(`授課班級：${rec.className}`,false,13,'left',false)],[kc(`授課教師：${teacherStr}`,false,13,'left',false)],[kc(`授課教室：${rec.classroom||''}`,false,13,'left',false)],[kc('')],['編號','日期','授課時間','鐘點/節','節數','小計','教師簽到'].map(h=>kc(h,true))];let totalFee=0;dates.forEach((d,i)=>{const dt=new Date(d+'T00:00:00'),ds=`${dt.getMonth()+1}/${dt.getDate()}（週${DN[dt.getDay()]}）`,sub=rate*sessPerDay;totalFee+=sub;data.push([kc(i+1),kc(ds),kc(rec.classTime||''),kc(rate),kc(sessPerDay),kc(sub),kc('')]);});data.push([kc(''),kc(''),kc('總計',true),kc(''),kc(''),kc(totalFee,true),kc('')]);const ws=XLSX.utils.aoa_to_sheet(data);ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:6}}];ws['!cols']=[{wch:6},{wch:16},{wch:14},{wch:8},{wch:6},{wch:10},{wch:16}];XLSX.utils.book_append_sheet(wb,ws,rec.className.substring(0,28));});if(!wb.SheetNames.length){alert('尚無班級資料');return;}XLSX.writeFile(wb,`${yl}學年度${pn}_教師簽到表.xlsx`,{cellStyles:true});}
+// ================================================================
+// 學生點名單
+// ================================================================
+function renderAttendancePage(){if(!needPeriod())return;const yl=S.years.find(y=>y.id===S.yearId)?.year||'',pn=PERIOD_NAMES[S.periodData?.type]||'';const rows=S.classRecords.map(rec=>{const cnt=(rec.enrolledStudentIds||[]).length,dates=(rec.classDates||[]).length;return `<tr><td><strong>${esc(rec.className)}</strong></td><td><span class="badge ${cnt>=6?'b-green':cnt>0?'b-orange':'b-gray'}">${cnt} 位</span></td><td><span class="badge ${dates?'b-green':'b-gray'}">${dates} 天</span></td><td class="no-print"><button class="btn btn-secondary btn-sm" onclick="showEnrollModal('${rec.id}')">編班</button> <button class="btn btn-secondary btn-sm" onclick="showDateManagerModal('${rec.id}')">日期</button></td></tr>`;}).join('');pc(`<div class="page-header"><div><div class="page-title">📝 學生點名單</div><div class="page-sub">${yl}學年度 ${pn}</div></div><button class="btn btn-success no-print" onclick="exportAttendanceExcel('${yl}','${pn}')">📊 匯出 Excel</button></div><div class="alert alert-info no-print">請先完成各班「編班」與「日期」設定，每班各一張工作表（橫式）。</div><div class="card"><div class="tbl-wrap"><table><thead><tr><th>班別</th><th>學生人數</th><th>上課天數</th><th class="no-print">操作</th></tr></thead><tbody>${rows||'<tr><td colspan="4"><div class="empty"><div class="eico">📝</div><p>尚無班級授課紀錄</p></div></td></tr>'}</tbody></table></div></div>`);}
+function exportAttendanceExcel(yl,pn){const KT='標楷體',bd={top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};const kc=(v,bold=false,sz=11,align='center')=>({v:v===null||v===undefined?'':v,t:typeof v==='number'?'n':'s',s:{font:{name:KT,sz,bold},alignment:{horizontal:align,vertical:'center',wrapText:true},border:bd}});const wb=XLSX.utils.book_new(),DN=['日','一','二','三','四','五','六'],title=`苗栗縣后庄國小${yl}學年度${pn}學習扶助課程學生點名單`;S.classRecords.forEach(rec=>{const ids=rec.enrolledStudentIds||[];if(!ids.length)return;const students=ids.map(id=>S.students.find(s=>s.id===id)).filter(Boolean),dates=(rec.classDates||[]).slice().sort(),dateHdrs=dates.map(d=>{const dt=new Date(d+'T00:00:00');return `${dt.getMonth()+1}/${dt.getDate()}`;});const data=[[Object.assign(kc(title,true,14,'center'),{})],['編號','班級','姓名','父','母','備註',...dateHdrs].map(h=>kc(h,true,11)),...students.map((s,i)=>[kc(s.number||String(i+1).padStart(3,'0')),kc(s.originClass||''),kc(s.name,false,11,'left'),kc(s.father||'',false,10,'left'),kc(s.mother||'',false,10,'left'),kc(s.note||''),...dates.map(()=>kc(''))])];const ws=XLSX.utils.aoa_to_sheet(data);ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:5+dates.length}}];ws['!cols']=[{wch:5},{wch:6},{wch:8},{wch:16},{wch:16},{wch:8},...dates.map(()=>({wch:6}))];ws['!pageSetup']={orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0};XLSX.utils.book_append_sheet(wb,ws,rec.className.substring(0,28));});if(!wb.SheetNames.length){alert('尚無含學生的班級，請先完成編班');return;}XLSX.writeFile(wb,`${yl}學年度${pn}_學生點名單.xlsx`,{cellStyles:true});}
+
+function pc(html) { document.getElementById('pageContent').innerHTML = html; }
+function v(id) { return document.getElementById(id)?.value?.trim()||''; }
+function num(id) { return parseFloat(document.getElementById(id)?.value)||0; }
+function ts() { return firebase.firestore.FieldValue.serverTimestamp(); }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function getTch(id) { return S.teachers.find(t=>t.id===id)||null; }
+
+function needPeriod() {
+  if (!S.periodId) {
+    pc(`<div class="alert alert-warning" style="margin-top:8px">請先在左側選擇<strong>學年度</strong>與<strong>期別</strong>，再進行資料輸入。<br><br><button class="btn btn-primary btn-sm" onclick="showYearMgr()">⚙ 新增學年度 / 期別</button></div>`);
+    return false;
+  }
+  return true;
+}
+
+function setModal(title, body, foot) {
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = body;
+  document.getElementById('modalFoot').innerHTML = foot;
+  document.getElementById('modalBg').style.display = 'flex';
+}
+function closeModal() { document.getElementById('modalBg').style.display = 'none'; }
+function openModal() { document.getElementById('modalBg').style.display = 'flex'; }
+
+function go(page) {
+  S.page = page;
+  document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active', el.dataset.page===page));
+  refresh();
+}
+
+function refresh() {
+  const pages = {
+    students: renderStudentsPage,
+    teachers: renderTeachersPage, rates: renderRatesPage, classes: renderClassesPage,
+    supervision: renderSupervisionPage, adminfee: renderAdminFeePage, vendor: renderVendorPage,
+    insurance: renderInsurancePage, summary: renderSummaryPage,
+    signin: renderSignInPage, attendance: renderAttendancePage,
+    'rpt-acct': renderAccountantReport, 'rpt-cash': renderCashierReport
+  };
+  const fn = pages[S.page];
+  if (fn) fn();
+}
+</script>
+</body>
+</html>
