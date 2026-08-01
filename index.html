@@ -1943,6 +1943,7 @@ function renderStudentsPage() {
     <div class="flex-row no-print">
       <button class="btn btn-secondary" onclick="downloadStudentTemplate()">📋 下載範本</button>
       <button class="btn btn-secondary" onclick="showStudentImportModal()">📥 匯入 Excel</button>
+      ${S.students.length?'<button class="btn btn-danger" onclick="deleteAllStudents()">🗑 全部刪除</button>':''}
       <button class="btn btn-primary" onclick="showStudentModal()">＋ 新增學生</button>
     </div></div>
     <div class="card"><div class="tbl-wrap"><table>
@@ -1967,6 +1968,18 @@ async function submitStudent(id) {
   await saveStudent({name,number:v('st_num'),originClass:v('st_cls'),father:v('st_fa'),mother:v('st_mo'),note:v('st_note')},id||null);
   closeModal(); refresh();
 }
+async function deleteAllStudents() {
+  if (!confirm(`確定要刪除全部 ${S.students.length} 位學生嗎？此動作無法復原。`)) return;
+  try {
+    for (const s of S.students) {
+      await db.collection('students').doc(s.id).delete();
+    }
+    await loadStudents();
+    refresh();
+    alert('✅ 已刪除全部學生');
+  } catch(e) { alert('❌ 刪除失敗：' + e.message); }
+}
+
 let importStudentRows=[];
 function showStudentImportModal() {
   setModal('📥 匯入學生資料',`
@@ -2045,7 +2058,7 @@ function showDateManagerModal(classRecordId) {
   let body='';
   if((S.periodData?.type==='summer'||S.periodData?.type==='winter')&&rec.startDate&&rec.endDate){
     const all=getWeekdaysInRange(rec.startDate,rec.endDate);
-    body='<div class="alert alert-info">依起訖日期自動產生平日，請勾選實際上課日期</div><div style="margin-bottom:8px"><button class="btn btn-secondary btn-sm" onclick="toggleAllDates(true)">全選</button> <button class="btn btn-secondary btn-sm" onclick="toggleAllDates(false)">取消全選</button></div><div style="display:flex;flex-wrap:wrap;gap:6px">';+all.map(d=>{const dt=new Date(d+'T00:00:00');return `<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:#F0F6FC;border-radius:6px;cursor:pointer;font-size:13px"><input type="checkbox" class="dChk" value="${d}" style="width:auto" ${existing.includes(d)?'checked':''}>${dt.getMonth()+1}/${dt.getDate()}（週${DN[dt.getDay()]}）</label>`;}).join('')+'</div>';
+    body='<div class="alert alert-info">依起訖日期自動產生平日，請勾選實際上課日期</div><div style="margin-bottom:8px"><button class="btn btn-secondary btn-sm" onclick="toggleAllDates(true)">全選</button> <button class="btn btn-secondary btn-sm" onclick="toggleAllDates(false)">取消全選</button></div><div style="display:flex;flex-wrap:wrap;gap:6px">'+all.map(d=>{const dt=new Date(d+'T00:00:00');return `<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:#F0F6FC;border-radius:6px;cursor:pointer;font-size:13px"><input type="checkbox" class="dChk" value="${d}" style="width:auto" ${existing.includes(d)?'checked':''}>${dt.getMonth()+1}/${dt.getDate()}（週${DN[dt.getDay()]}）</label>`;}).join('')+'</div>';
   } else {
     const list=existing.map(d=>{const dt=new Date(d+'T00:00:00');return `<div data-date="${d}" style="display:flex;align-items:center;justify-content:space-between;padding:6px;border-bottom:1px solid var(--border)"><span>${dt.getMonth()+1}/${dt.getDate()}（週${DN[dt.getDay()]}）</span><button class="btn btn-danger btn-sm" onclick="this.closest('[data-date]').remove()">✕</button></div>`;}).join('');
     body=`<div class="flex-row fg"><input type="date" id="newDP" style="flex:1"><button class="btn btn-primary btn-sm" onclick="addDateItem()">新增</button></div><div id="dateList">${list}</div>`;
@@ -2068,7 +2081,10 @@ function exportSignInExcel(){
   const KT='標楷體',bd={top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};
   const kc=(v,bold=false,sz=12,align='center',border=true)=>({v:v===null||v===undefined?'':v,t:typeof v==='number'?'n':'s',s:{font:{name:KT,sz,bold},alignment:{horizontal:align,vertical:'center',wrapText:true},border:border?bd:undefined}});
   const wb=XLSX.utils.book_new(),DN=['日','一','二','三','四','五','六'],rv=S.rates,swRate=rv.summerWinter||rv.inClass;
-  S.classRecords.forEach(rec=>{const dates=(rec.classDates||[]).slice().sort(),t=getTch(rec.teacherId),t2=rec.teacher2Id?getTch(rec.teacher2Id):null,totalSess=(rec.inClassSessions||0)+(rec.afterSchoolSessions||0)+(rec.summerWinterSessions||0),sessPerDay=dates.length>0?Math.round(totalSess/dates.length):0,rate=(rec.summerWinterSessions||0)>0?swRate:((rec.afterSchoolSessions||0)>0?rv.afterSchool:rv.inClass),teacherStr=(t?t.name:'')+(t2?'/'+t2.name:''),title=`苗栗縣后庄國小${yl}學年度${pn}學習扶助課程教師簽到表`;const data=[[kc(title,true,16,'center',false)],[kc('')],[kc(`授課班級：${rec.className}`,false,13,'left',false)],[kc(`授課教師：${teacherStr}`,false,13,'left',false)],[kc(`授課教室：${rec.classroom||''}`,false,13,'left',false)],[kc('')],['編號','日期','授課時間','鐘點/節','節數','小計','教師簽到'].map(h=>kc(h,true))];let totalFee=0;dates.forEach((d,i)=>{const dt=new Date(d+'T00:00:00'),ds=`${dt.getMonth()+1}/${dt.getDate()}（週${DN[dt.getDay()]}）`,sub=rate*sessPerDay;totalFee+=sub;data.push([kc(i+1),kc(ds),kc(rec.classTime||''),kc(rate),kc(sessPerDay),kc(sub),kc('')]);});data.push([kc(''),kc(''),kc('總計',true),kc(''),kc(''),kc(totalFee,true),kc('')]);const ws=XLSX.utils.aoa_to_sheet(data);ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:6}}];ws['!cols']=[{wch:6},{wch:16},{wch:14},{wch:8},{wch:6},{wch:10},{wch:16}];XLSX.utils.book_append_sheet(wb,ws,rec.className.substring(0,28));});if(!wb.SheetNames.length){alert('尚無班級資料');return;}
+  S.classRecords.forEach(rec=>{const dates=(rec.classDates||[]).slice().sort(),t=getTch(rec.teacherId),t2=rec.teacher2Id?getTch(rec.teacher2Id):null,totalSess=(rec.inClassSessions||0)+(rec.afterSchoolSessions||0)+(rec.summerWinterSessions||0),sessPerDay=dates.length>0?Math.round(totalSess/dates.length):0,rate=(rec.summerWinterSessions||0)>0?swRate:((rec.afterSchoolSessions||0)>0?rv.afterSchool:rv.inClass),teacherStr=(t?t.name:'')+(t2?'/'+t2.name:''),title=`苗栗縣后庄國小${yl}學年度${pn}學習扶助課程教師簽到表`;const data=[[kc(title,true,16,'center',false)],[kc('')],[kc(`授課班級：${rec.className}`,false,13,'left',false)],[kc(`授課教師：${teacherStr}`,false,13,'left',false)],[kc(`授課教室：${rec.classroom||''}`,false,13,'left',false)],[kc('')],['編號','日期','授課時間','鐘點/節','節數','小計','教師簽到'].map(h=>kc(h,true))];let totalFee=0;dates.forEach((d,i)=>{const dt=new Date(d+'T00:00:00'),ds=`${dt.getMonth()+1}/${dt.getDate()}（週${DN[dt.getDay()]}）`,sub=rate*sessPerDay;totalFee+=sub;data.push([kc(i+1),kc(ds),kc(rec.classTime||''),kc(rate),kc(sessPerDay),kc(sub),kc('')]);});data.push([kc(''),kc(''),kc('總計',true),kc(''),kc(''),kc(totalFee,true),kc('')]);const ws=XLSX.utils.aoa_to_sheet(data);ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:6}}];ws['!cols']=[{wch:6},{wch:16},{wch:14},{wch:8},{wch:6},{wch:10},{wch:16}];const sn=rec.className.substring(0,28);
+    let finalName=sn, cnt=1;
+    while(wb.SheetNames.includes(finalName)){finalName=sn.substring(0,25)+'_'+cnt; cnt++;}
+    XLSX.utils.book_append_sheet(wb,ws,finalName);});if(!wb.SheetNames.length){alert('尚無班級資料');return;}
   XLSX.writeFile(wb,`${yl}學年度${pn}_教師簽到表.xlsx`,{cellStyles:true});
   } catch(e){alert('❌ 匯出失敗：'+e.message);}
 }
@@ -2083,7 +2099,10 @@ function exportAttendanceExcel(){
   const KT='標楷體',bd={top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};
   const kc=(v,bold=false,sz=11,align='center')=>({v:v===null||v===undefined?'':v,t:typeof v==='number'?'n':'s',s:{font:{name:KT,sz,bold},alignment:{horizontal:align,vertical:'center',wrapText:true},border:bd}});
   const wb=XLSX.utils.book_new(),DN=['日','一','二','三','四','五','六'],title=`苗栗縣后庄國小${yl}學年度${pn}學習扶助課程學生點名單`;
-  S.classRecords.forEach(rec=>{const ids=rec.enrolledStudentIds||[];if(!ids.length)return;const students=ids.map(id=>S.students.find(s=>s.id===id)).filter(Boolean),dates=(rec.classDates||[]).slice().sort(),dateHdrs=dates.map(d=>{const dt=new Date(d+'T00:00:00');return `${dt.getMonth()+1}/${dt.getDate()}`;});const data=[[Object.assign(kc(title,true,14,'center'),{})],['編號','班級','姓名','父','母','備註',...dateHdrs].map(h=>kc(h,true,11)),...students.map((s,i)=>[kc(s.number||String(i+1).padStart(3,'0')),kc(s.originClass||''),kc(s.name,false,11,'left'),kc(s.father||'',false,10,'left'),kc(s.mother||'',false,10,'left'),kc(s.note||''),...dates.map(()=>kc(''))])];const ws=XLSX.utils.aoa_to_sheet(data);ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:5+dates.length}}];ws['!cols']=[{wch:5},{wch:6},{wch:8},{wch:16},{wch:16},{wch:8},...dates.map(()=>({wch:6}))];ws['!pageSetup']={orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0};XLSX.utils.book_append_sheet(wb,ws,rec.className.substring(0,28));});if(!wb.SheetNames.length){alert('尚無含學生的班級，請先完成編班');return;}
+  S.classRecords.forEach(rec=>{const ids=rec.enrolledStudentIds||[];if(!ids.length)return;const students=ids.map(id=>S.students.find(s=>s.id===id)).filter(Boolean),dates=(rec.classDates||[]).slice().sort(),dateHdrs=dates.map(d=>{const dt=new Date(d+'T00:00:00');return `${dt.getMonth()+1}/${dt.getDate()}`;});const data=[[Object.assign(kc(title,true,14,'center'),{})],['編號','班級','姓名','父','母','備註',...dateHdrs].map(h=>kc(h,true,11)),...students.map((s,i)=>[kc(s.number||String(i+1).padStart(3,'0')),kc(s.originClass||''),kc(s.name,false,11,'left'),kc(s.father||'',false,10,'left'),kc(s.mother||'',false,10,'left'),kc(s.note||''),...dates.map(()=>kc(''))])];const ws=XLSX.utils.aoa_to_sheet(data);ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:5+dates.length}}];ws['!cols']=[{wch:5},{wch:6},{wch:8},{wch:16},{wch:16},{wch:8},...dates.map(()=>({wch:6}))];ws['!pageSetup']={orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0};const sn2=rec.className.substring(0,28);
+    let finalName2=sn2, cnt2=1;
+    while(wb.SheetNames.includes(finalName2)){finalName2=sn2.substring(0,25)+'_'+cnt2; cnt2++;}
+    XLSX.utils.book_append_sheet(wb,ws,finalName2);});if(!wb.SheetNames.length){alert('尚無含學生的班級，請先完成編班');return;}
   XLSX.writeFile(wb,`${yl}學年度${pn}_學生點名單.xlsx`,{cellStyles:true});
   } catch(e){alert('❌ 匯出失敗：'+e.message);}
 }
