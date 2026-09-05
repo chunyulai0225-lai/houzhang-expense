@@ -36,6 +36,7 @@ async function makeRecord(
     periodCount?: number | null;
     unitPrice?: number | null;
     amount?: number | null;
+    substitutePeriodFeeText?: string | null;
   }
 ) {
   const monthlyImport = await prisma.monthlyImport.create({
@@ -49,6 +50,7 @@ async function makeRecord(
       substituteTeacherText: overrides.substituteTeacherText ?? null,
       dateText: overrides.date,
       periodText: "P2",
+      substitutePeriodFeeText: overrides.substitutePeriodFeeText ?? undefined,
     },
   });
   const record = await prisma.substituteRecord.create({
@@ -259,5 +261,119 @@ describe("Phase 9 第一階段：節次型費用計算", () => {
     expect(summary[0].substituteTeacherId).toBeNull();
     expect(summary[0].substituteTeacherName).toContain("未配對");
     expect(summary[0].totalAmount).toBe("405");
+  });
+});
+
+describe("Phase 9-5：amount 優先採用 Raw 的實際代課鐘點費，不再由 fundingSource 單獨推導", () => {
+  it("1/2/3. GENERAL/OVERTIME/PROJECT 的 Raw=405 都直接採用，unitPrice 仍是 FeeRule 費率", async () => {
+    const semester = await makeTestSemester(9201);
+    await createFeeRule({ semesterId: semester.id, feeType: "SUBSTITUTE_PERIOD", amount: 405, effectiveDate: new Date("2025-01-01") });
+    await createFeeRule({ semesterId: semester.id, feeType: "OVERTIME_PERIOD", amount: 405, effectiveDate: new Date("2025-01-01") });
+
+    for (const fundingSource of ["GENERAL", "OVERTIME", "PROJECT"] as const) {
+      const { record } = await makeRecord(semester.id, {
+        date: "2025-03-10",
+        fundingSource,
+        classificationMethod: fundingSource === "GENERAL" ? "GENERAL_DEFAULT" : "WEEKLY_RULE",
+        substitutePeriodFeeText: "405",
+      });
+      const result = await calculateSubstituteRecordFee(record.id);
+      expect(result.amount).toBe("405");
+      expect(result.unitPrice).toBe("405");
+    }
+  });
+
+  it("4/5. Raw=0 時 amount=0，OVERTIME 與 GENERAL 都一樣，不會被 fundingSource 洗回 405", async () => {
+    const semester = await makeTestSemester(9202);
+    await createFeeRule({ semesterId: semester.id, feeType: "SUBSTITUTE_PERIOD", amount: 405, effectiveDate: new Date("2025-01-01") });
+    await createFeeRule({ semesterId: semester.id, feeType: "OVERTIME_PERIOD", amount: 405, effectiveDate: new Date("2025-01-01") });
+
+    const { record: overtimeRecord } = await makeRecord(semester.id, {
+      date: "2025-03-10", fundingSource: "OVERTIME", classificationMethod: "WEEKLY_RULE", substitutePeriodFeeText: "0",
+    });
+    const overtimeResult = await calculateSubstituteRecordFee(overtimeRecord.id);
+    expect(overtimeResult.amount).toBe("0");
+    expect(overtimeResult.unitPrice).toBe("405"); // 參考費率仍然是405，只是實際不用付這筆
+
+    const { record: generalRecord } = await makeRecord(semester.id, {
+      date: "2025-03-11", fundingSource: "GENERAL", substitutePeriodFeeText: "0",
+    });
+    const generalResult = await calculateSubstituteRecordFee(generalRecord.id);
+    expect(generalResult.amount).toBe("0");
+    expect(generalResult.unitPrice).toBe("405");
+  });
+
+  it("6/7/8. Raw 缺漏／空字串／無法解析，都退回 FeeRule 費率計算，並清楚記錄退回原因", async () => {
+    const semester = await makeTestSemester(9203);
+    await createFeeRule({ semesterId: semester.id, feeType: "SUBSTITUTE_PERIOD", amount: 405, effectiveDate: new Date("2025-01-01") });
+
+    const { record: nullRecord } = await makeRecord(semester.id, { date: "2025-03-10", fundingSource: "GENERAL", substitutePeriodFeeText: null });
+    const nullResult = await calculateSubstituteRecordFee(nullRecord.id);
+    expect(nullResult.amount).toBe("405");
+    expect(nullResult.unitPrice).toBe("405");
+
+    const { record: emptyRecord } = await makeRecord(semester.id, { date: "2025-03-11", fundingSource: "GENERAL", substitutePeriodFeeText: "" });
+    const emptyResult = await calculateSubstituteRecordFee(emptyRecord.id);
+    expect(emptyResult.amount).toBe("405");
+
+    const { record: garbledRecord } = await makeRecord(semester.id, { date: "2025-03-12", fundingSource: "GENERAL", substitutePeriodFeeText: "詳見備註" });
+    const garbledResult = await calculateSubstituteRecordFee(garbledRecord.id);
+    expect(garbledResult.amount).toBe("405");
+
+    // 三種情況都應該退回 FeeRule 計算，changeLog 要留下清楚說明，不能假裝是原始資料本來就有的金額
+    const changeLog = await prisma.changeLog.findFirst({
+      where: { recordId: nullRecord.id, fieldName: "amount" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(changeLog?.reason).toContain("原始代課鐘點費缺漏");
+    expect(changeLog?.reason).toContain("退回 FeeRule");
+  });
+
+  it("9. Raw 缺漏，且找不到生效中的 FeeRule → 不硬算，amount/unitPrice 都是 null，並回報明確原因", async () => {
+    const semester = await makeTestSemester(9204);
+    // 故意不建立任何 FeeRule
+    const { record } = await makeRecord(semester.id, { date: "2025-03-10", fundingSource: "GENERAL", substitutePeriodFeeText: null });
+    const result = await calculateSubstituteRecordFee(record.id);
+    expect(result.amount).toBeNull();
+    expect(result.unitPrice).toBeNull();
+    expect(result.skippedReason).toContain("原始代課鐘點費缺漏");
+    expect(result.skippedReason).toContain("找不到");
+  });
+
+  it("10. unitPrice=405、amount=0 可以同時合法存在於同一筆紀錄", async () => {
+    const semester = await makeTestSemester(9205);
+    await createFeeRule({ semesterId: semester.id, feeType: "OVERTIME_PERIOD", amount: 405, effectiveDate: new Date("2025-01-01") });
+    const { record } = await makeRecord(semester.id, {
+      date: "2025-03-10", fundingSource: "OVERTIME", classificationMethod: "WEEKLY_RULE", substitutePeriodFeeText: "0",
+    });
+    await calculateSubstituteRecordFee(record.id);
+    const dbRecord = await prisma.substituteRecord.findUniqueOrThrow({ where: { id: record.id } });
+    expect(dbRecord.unitPrice?.toString()).toBe("405");
+    expect(dbRecord.amount?.toString()).toBe("0");
+  });
+
+  it("11. 月彙總：0元紀錄仍計入節數，但不增加金額", async () => {
+    const semester = await makeTestSemester(9206);
+    await createFeeRule({ semesterId: semester.id, feeType: "SUBSTITUTE_PERIOD", amount: 405, effectiveDate: new Date("2025-01-01") });
+    await createFeeRule({ semesterId: semester.id, feeType: "OVERTIME_PERIOD", amount: 405, effectiveDate: new Date("2025-01-01") });
+    const teacher = await makeTeacher("Phase9-5彙總測試教師");
+
+    const { monthlyImport: imp1, record: r1 } = await makeRecord(semester.id, {
+      date: "2025-03-01", fundingSource: "GENERAL", substituteTeacherId: teacher.id, substitutePeriodFeeText: "405",
+    });
+    const { monthlyImport: imp2, record: r2 } = await makeRecord(semester.id, {
+      date: "2025-03-02", fundingSource: "OVERTIME", classificationMethod: "WEEKLY_RULE", substituteTeacherId: teacher.id, substitutePeriodFeeText: "0",
+    });
+    await calculateSubstituteRecordFee(r1.id);
+    await calculateSubstituteRecordFee(r2.id);
+
+    const summary = await summarizeTeacherMonthlyFees([imp1.id, imp2.id]);
+    const row = summary.find((s) => s.substituteTeacherId === teacher.id)!;
+    expect(row.generalCount).toBe(1);
+    expect(row.generalAmount).toBe("405");
+    expect(row.overtimeCount).toBe(1); // 0元那筆仍然計入節數
+    expect(row.overtimeAmount).toBe("0"); // 但金額是0，不會被誤加成405
+    expect(row.totalCount).toBe(2);
+    expect(row.totalAmount).toBe("405");
   });
 });

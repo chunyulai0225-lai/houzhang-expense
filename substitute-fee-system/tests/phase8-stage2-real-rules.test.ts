@@ -17,6 +17,8 @@ import { createPerson } from "../src/services/personService";
 import { createProject } from "../src/services/projectService";
 import { importSubstituteExcel, resolveTeacherReference } from "../src/services/excelImportService";
 import { classifyMonthlyImport, classifySubstituteRecord, overrideClassification } from "../src/services/classificationService";
+import { createFeeRule } from "../src/services/feeRuleService";
+import { calculateSubstituteRecordFee } from "../src/services/feeCalculationService";
 
 const SUBSTITUTE_CANDIDATES = [
   process.env.REAL_SUBSTITUTE_EXCEL_PATH,
@@ -142,6 +144,11 @@ describe.skipIf(!REAL_SUBSTITUTE_FILE || !REAL_OVERTIME_FILE || !REAL_PROJECT_FI
           },
         });
       }
+
+      // Phase9-5 驗證用：建立正式費率，確認真實 OVERTIME 錨點的實際代課費由 Raw 的
+      // substitutePeriodFeeText 決定（這幾筆真實資料是 0），不會被 fundingSource=OVERTIME 洗成 405。
+      await createFeeRule({ semesterId, feeType: "SUBSTITUTE_PERIOD", amount: 405, effectiveDate: new Date("2026-02-01") });
+      await createFeeRule({ semesterId, feeType: "OVERTIME_PERIOD", amount: 405, effectiveDate: new Date("2026-02-01") });
     });
 
     afterAll(async () => {
@@ -162,6 +169,7 @@ describe.skipIf(!REAL_SUBSTITUTE_FILE || !REAL_OVERTIME_FILE || !REAL_PROJECT_FI
       await prisma.monthlyImport.deleteMany({ where: { id: { in: importIds } } });
       await prisma.specialDateRule.deleteMany({ where: { semesterId } });
       await prisma.specialWeeklyRule.deleteMany({ where: { semesterId } });
+      await prisma.feeRule.deleteMany({ where: { semesterId } });
       await prisma.personCode.deleteMany({ where: { personId: { in: cleanupPersonIds } } });
       await prisma.project.deleteMany({ where: { semesterId } });
       await prisma.person.deleteMany({ where: { id: { in: cleanupPersonIds } } });
@@ -213,6 +221,22 @@ describe.skipIf(!REAL_SUBSTITUTE_FILE || !REAL_OVERTIME_FILE || !REAL_PROJECT_FI
       }
     });
 
+    it("§二/12（Phase9-5）. 真實 OVERTIME 錨點的實際代課費 = Raw 的代課鐘點費（0），不是 fundingSource 帶出的 405", async () => {
+      const cases = [
+        { name: "陳心啟", importId: () => nonBdImportId, date: new Date(Date.UTC(2026, 5, 30)), periodCode: "P2" },
+        { name: "王玉蓮", importId: () => bdImportId, date: new Date(Date.UTC(2026, 5, 9)), periodCode: "P4" },
+        { name: "林宜慧", importId: () => bdImportId, date: new Date(Date.UTC(2026, 5, 30)), periodCode: "P1" },
+        { name: "羅純惠", importId: () => bdImportId, date: new Date(Date.UTC(2026, 5, 30)), periodCode: "P1" },
+      ];
+      for (const c of cases) {
+        const record = await findAnchorRecord(c.importId(), c.name, c.date, c.periodCode);
+        expect(record.fundingSource).toBe("OVERTIME"); // 沿用上一個測試已經分類好的結果
+        const result = await calculateSubstituteRecordFee(record.id, "Stage2回歸測試");
+        expect(result.amount).toBe("0"); // 真實 Excel 這筆代課鐘點費原文就是 0
+        expect(result.unitPrice).toBe("405"); // 參考費率仍然是405，只是這筆代課教師實際不用付
+      }
+    });
+
     it("§二/1＋5. 陳芝庭錨點：星期四第3節命中 OVERTIME，且 effectiveDate 生效邊界正確（早於紀錄日期時不命中）", async () => {
       const record = await findAnchorRecord(bdImportId, "陳芝庭", new Date(Date.UTC(2026, 5, 18)), "P3");
       await resolveTeacherReference(record.id, "original", anchors["陳芝庭"], "Stage2回歸測試");
@@ -241,6 +265,11 @@ describe.skipIf(!REAL_SUBSTITUTE_FILE || !REAL_OVERTIME_FILE || !REAL_PROJECT_FI
       const afterEffective = await classifySubstituteRecord(record.id, "Stage2回歸測試");
       expect(afterEffective.fundingSource).toBe("OVERTIME");
       expect(afterEffective.classificationRuleId).toBe(updatedRule.id);
+
+      // Phase9-5：陳芝庭這筆真實 OVERTIME 紀錄，實際代課費同樣是 Raw 的 0，不是 405
+      const feeResult = await calculateSubstituteRecordFee(record.id, "Stage2回歸測試");
+      expect(feeResult.amount).toBe("0");
+      expect(feeResult.unitPrice).toBe("405");
     });
 
     it("§二/2. 真實 PROJECT 規則命中真實紀錄：確認的資料模型缺口——來源檔案沒有節次，Stage2 不猜、不建立", async () => {
