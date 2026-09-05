@@ -1,0 +1,467 @@
+// 后庄國小代課費自動化管理系統 - Phase 1
+// 資料庫與學年度／學期核心架構
+//
+// 設計原則（對應 PRD 第五節「重要資料設計原則」）：
+// 1. 學年度／學期一律為資料（Semester rows），不得寫死任何年度。
+// 2. 金額（代課鐘點、超鐘點...）一律為 FeeRule 資料列，不得寫死。
+// 3. 節/天換算規則（8節=1天、24節上限）留待 Phase 9 身心調適假模組再建表，本階段不涉及。
+// 4. 不使用跨表 VLOOKUP／Excel 公式，所有關聯皆為資料庫外鍵。
+// 5. 人員離校不刪除資料，歷史紀錄透過關聯查詢保留。
+// 6. 原始匯入資料（SubstituteRecordRaw）與系統判斷後資料（SubstituteRecord）分離，前者不可覆寫。
+// 7. 特殊規則（超鐘點／專案）皆為資料列，並帶生效日／結束日，供中途異動與複製學期使用。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // 使用 PostgreSQL（本機測試用資料庫），正式上線可沿用同一份 schema 直接部署到正式 PostgreSQL 主機。
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// 一、學年度／學期
+// ============================================================
+
+enum SemesterStatus {
+  NOT_STARTED // 尚未開始
+  ACTIVE // 使用中
+  ENDED // 已結束
+}
+
+// 超鐘點判斷模式：教師＋星期＋節次，或再加科目。兩種都保留，之後可切換。
+enum OvertimeMatchMode {
+  TEACHER_WEEKDAY_PERIOD
+  TEACHER_WEEKDAY_PERIOD_SUBJECT
+}
+
+model Semester {
+  id                String            @id @default(cuid())
+  schoolYear        Int // 學年度，例如 115、116、117……不得寫死
+  term              Int // 學期：1 或 2
+  status            SemesterStatus    @default(NOT_STARTED)
+  isCurrent         Boolean           @default(false) // 是否為目前使用中的學期（供首頁預設帶入）
+  startDate         DateTime
+  endDate           DateTime
+  overtimeMatchMode OvertimeMatchMode @default(TEACHER_WEEKDAY_PERIOD)
+  note              String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  // 複製學期時要複製的內容
+  semesterRoles      SemesterRole[]
+  feeRules           FeeRule[]
+  projects           Project[]
+  specialWeeklyRules SpecialWeeklyRule[]
+
+  // 複製學期時「不」複製的內容（每月資料）
+  specialDateRules   SpecialDateRule[]
+  schoolCalendarDays SchoolCalendarDay[]
+  monthlyImports     MonthlyImport[]
+  monthlyLocks       MonthlyLock[]
+
+  @@unique([schoolYear, term])
+  @@index([isCurrent])
+}
+
+// ============================================================
+// 二、人員
+// ============================================================
+
+enum EnrollmentStatus {
+  ENROLLED // 在校
+  NOT_ENROLLED // 不在校
+}
+
+model Person {
+  id               String           @id @default(cuid())
+  name             String
+  payrollCode      String? // 薪資／出納所需代碼
+  enrollmentStatus EnrollmentStatus @default(ENROLLED)
+  enrollDate       DateTime?
+  leaveDate        DateTime?
+  note             String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  personCodes        PersonCode[]
+  semesterRoles      SemesterRole[]
+  specialWeeklyRules SpecialWeeklyRule[]
+  specialDateRules   SpecialDateRule[]
+
+  substituteRecordsAsOriginal   SubstituteRecord[] @relation("RecordOriginalTeacher")
+  substituteRecordsAsSubstitute SubstituteRecord[] @relation("RecordSubstituteTeacher")
+
+  @@index([enrollmentStatus])
+}
+
+// 人員的代碼／身分類別，一人可多筆（解決 49 頁 PDF 一人多列問題）
+model PersonCode {
+  id                String   @id @default(cuid())
+  personId          String
+  person            Person   @relation(fields: [personId], references: [id])
+  schoolYear        Int? // 此代碼出現／有效的學年度（PDF 通常逐年發佈）
+  categoryName      String // 身分類別，例如：代理教師／合理員額／課後照顧／增置教師／攜手計畫／其他
+  categoryCode      String? // 原始分類代碼，例如 B、D……供 BD/非BD 判斷使用
+  originalStaffCode String? // 原始員工代號（保留但不作為主要識別方式）
+  note              String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([personId])
+  @@index([categoryCode])
+}
+
+// 編制內（BD）／編制外（非BD）判斷規則表，不寫死在程式中。
+// 目前已確認規則：代碼為 B 或 D → 編制內；其餘代碼由管理者陸續補列。
+model BdClassificationRule {
+  id        String   @id @default(cuid())
+  codeValue String   @unique
+  isBd      Boolean
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================================
+// 三、學期職務
+// ============================================================
+
+enum RoleType {
+  HOMEROOM_TEACHER // 導師
+  SUBJECT_TEACHER // 科任教師
+  ADMIN // 行政
+  DIRECTOR // 主任
+  SECTION_CHIEF // 組長
+  PRINCIPAL // 校長
+  OTHER
+}
+
+model SemesterRole {
+  id         String   @id @default(cuid())
+  personId   String
+  person     Person   @relation(fields: [personId], references: [id])
+  semesterId String
+  semester   Semester @relation(fields: [semesterId], references: [id])
+  roleType   RoleType
+  roleDetail String? // 詳細職務，例如「三年甲班導師」「教學組長」
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([personId])
+  @@index([semesterId])
+}
+
+// ============================================================
+// 四、費用規則
+// ============================================================
+
+enum FeeType {
+  SUBSTITUTE_PERIOD // 代課鐘點
+  OVERTIME_PERIOD // 超鐘點
+  HOMEROOM_SUBSTITUTE // 代導師費（第一版僅建立類型與金額，不寫自動判斷邏輯）
+  DAILY_WAGE // 日薪（同上）
+  HALF_DAY_WAGE // 半日薪（同上）
+  OTHER
+}
+
+model FeeRule {
+  id            String    @id @default(cuid())
+  semesterId    String
+  semester      Semester  @relation(fields: [semesterId], references: [id])
+  feeType       FeeType
+  amount        Decimal
+  effectiveDate DateTime
+  endDate       DateTime?
+  note          String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([semesterId, feeType, effectiveDate])
+}
+
+// ============================================================
+// 五、每週課程／時段代碼表（section 10）
+// ============================================================
+
+model PeriodSlot {
+  id               String   @id @default(cuid())
+  code             String   @unique // 例如 EARLY_STUDY, P1...P7, LUNCH
+  displayName      String // 早自修／第1節……／午休
+  sortOrder        Int
+  isTeachingPeriod Boolean  @default(true) // 早自修／午休非授課節次
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// ============================================================
+// 六、專案
+// ============================================================
+
+model Project {
+  id           String   @id @default(cuid())
+  semesterId   String
+  semester     Semester @relation(fields: [semesterId], references: [id])
+  name         String // 例如「輔導團減課」
+  feeTypeLabel String // 自訂費用類型名稱（各專案單價可能不同，不共用 FeeRule）
+  unitPrice    Decimal
+  isActive     Boolean  @default(true)
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  specialWeeklyRules SpecialWeeklyRule[]
+  specialDateRules   SpecialDateRule[]
+  substituteRecords  SubstituteRecord[]
+
+  @@index([semesterId])
+}
+
+// ============================================================
+// 七、超鐘點／專案 — 每週固定規則（同一架構、type 區分）
+// ============================================================
+
+enum RuleType {
+  OVERTIME
+  PROJECT
+}
+
+enum Weekday {
+  MON
+  TUE
+  WED
+  THU
+  FRI
+}
+
+model SpecialWeeklyRule {
+  id            String    @id @default(cuid())
+  semesterId    String
+  semester      Semester  @relation(fields: [semesterId], references: [id])
+  personId      String // 原教師
+  person        Person    @relation(fields: [personId], references: [id])
+  ruleType      RuleType
+  projectId     String? // ruleType = PROJECT 時必填
+  project       Project?  @relation(fields: [projectId], references: [id])
+  weekday       Weekday
+  periodCode    String // 對應 PeriodSlot.code
+  subject       String? // 供「教師+星期+節次+科目」判斷模式使用，第一版不強制
+  weeklyPeriods Decimal // 每週節數
+  effectiveDate DateTime
+  endDate       DateTime?
+  note          String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([semesterId, personId, weekday, periodCode])
+}
+
+// ============================================================
+// 八、單日例外
+// ============================================================
+
+enum OverrideClassification {
+  GENERAL // 一般公費
+  OVERTIME // 超鐘點
+  PROJECT // 專案
+}
+
+model SpecialDateRule {
+  id                         String                 @id @default(cuid())
+  semesterId                 String
+  semester                   Semester               @relation(fields: [semesterId], references: [id])
+  date                       DateTime
+  personId                   String // 原教師
+  person                     Person                 @relation(fields: [personId], references: [id])
+  periodCode                 String
+  originalClassificationNote String? // 原本分類（記錄用途）
+  overrideClassification     OverrideClassification
+  projectId                  String?
+  project                    Project?               @relation(fields: [projectId], references: [id])
+  note                       String?
+  createdAt                  DateTime               @default(now())
+  updatedAt                  DateTime               @updatedAt
+
+  @@index([semesterId, personId, date, periodCode])
+}
+
+// ============================================================
+// 九、學校上課日曆（以「日」為最小單位，月份/星期上班日數皆由此聚合查詢得出，
+//     避免與逐日資料重複記錄造成不同步）
+// ============================================================
+
+model SchoolCalendarDay {
+  id            String    @id @default(cuid())
+  semesterId    String?
+  semester      Semester? @relation(fields: [semesterId], references: [id])
+  date          DateTime  @unique
+  weekday       Weekday
+  isTeachingDay Boolean // 是否為上課日（人工可調整，用以排除國定假日／停課日／寒暑假等）
+  note          String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([semesterId])
+}
+
+// ============================================================
+// 十、每月匯入
+// ============================================================
+
+model MonthlyImport {
+  id           String   @id @default(cuid())
+  semesterId   String
+  semester     Semester @relation(fields: [semesterId], references: [id])
+  year         Int // 西元年，例如 2026
+  month        Int // 1-12
+  importedAt   DateTime @default(now())
+  fileName     String
+  importedBy   String?
+  totalCount   Int      @default(0)
+  successCount Int      @default(0)
+  errorCount   Int      @default(0)
+  versionNo    Int      @default(1) // 同月重複匯入時遞增，不覆蓋舊版本
+  note         String?
+  createdAt    DateTime @default(now())
+
+  rawRecords        SubstituteRecordRaw[]
+  substituteRecords SubstituteRecord[]
+
+  @@index([semesterId, year, month])
+}
+
+// 原始 Excel 資料，永不覆寫
+model SubstituteRecordRaw {
+  id                    String        @id @default(cuid())
+  monthlyImportId       String
+  monthlyImport         MonthlyImport @relation(fields: [monthlyImportId], references: [id])
+  rowNumber             Int? // 序
+  originalTeacherText   String? // 原教師（原始文字）
+  dateText              String? // 日期原始文字，例如 "06-18(四) 13:50 ~ 15:50"
+  leaveTypeText         String? // 假別
+  hoursOrDaysText       String? // 時數／天數
+  periodText            String? // 節次
+  classText             String? // 班級
+  subjectText           String? // 科目
+  substituteTeacherText String? // 代課教師
+  teacherCertText       String? // 教師證
+  payGradeText          String? // 薪等
+  homeroomFeeText       String? // 代導師
+  rawJson               String? // 保留完整原始列 JSON，防欄位異動遺漏
+  createdAt             DateTime      @default(now())
+
+  processedRecord SubstituteRecord?
+
+  @@index([monthlyImportId])
+}
+
+// ============================================================
+// 十一、解析後代課資料（系統的「事實表」）
+// ============================================================
+
+enum StaffType {
+  BD
+  NON_BD
+  UNKNOWN
+}
+
+enum FundingSource {
+  GENERAL // 一般公費
+  OVERTIME // 超鐘點
+  PROJECT // 專案
+  UNDETERMINED
+}
+
+enum ClassificationMethod {
+  WEEKLY_RULE // 每週固定規則
+  DATE_EXCEPTION // 單日例外
+  GENERAL_DEFAULT // 一般公費（無特殊設定）
+  MANUAL_OVERRIDE // 人工修正
+}
+
+model SubstituteRecord {
+  id                   String               @id @default(cuid())
+  rawRecordId          String               @unique
+  rawRecord            SubstituteRecordRaw  @relation(fields: [rawRecordId], references: [id])
+  monthlyImportId      String
+  monthlyImport        MonthlyImport        @relation(fields: [monthlyImportId], references: [id])
+  originalTeacherId    String?
+  originalTeacher      Person?              @relation("RecordOriginalTeacher", fields: [originalTeacherId], references: [id])
+  substituteTeacherId  String?
+  substituteTeacher    Person?              @relation("RecordSubstituteTeacher", fields: [substituteTeacherId], references: [id])
+  date                 DateTime
+  weekday              Weekday
+  periodCode           String?
+  className            String?
+  subject              String?
+  leaveType            String?
+  rawHoursOrDays       String? // 保留原始時數/天數文字
+  periodCount          Decimal? // 節數（計算用）
+  staffType            StaffType            @default(UNKNOWN)
+  fundingSource        FundingSource        @default(UNDETERMINED)
+  projectId            String?
+  project              Project?             @relation(fields: [projectId], references: [id])
+  unitPrice            Decimal?
+  amount               Decimal?
+  classificationMethod ClassificationMethod @default(GENERAL_DEFAULT)
+  isManuallyModified   Boolean              @default(false)
+  note                 String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+
+  @@index([monthlyImportId])
+  @@index([originalTeacherId])
+  @@index([substituteTeacherId])
+  @@index([date])
+}
+
+// ============================================================
+// 十二、每月鎖定
+// ============================================================
+
+enum MonthlyStatus {
+  NOT_IMPORTED // 尚未匯入
+  IMPORTED // 已匯入
+  PENDING_REVIEW // 待確認
+  CONFIRMED // 已確認
+  LOCKED // 已鎖定
+}
+
+model MonthlyLock {
+  id         String        @id @default(cuid())
+  semesterId String?
+  semester   Semester?     @relation(fields: [semesterId], references: [id])
+  year       Int
+  month      Int
+  status     MonthlyStatus @default(NOT_IMPORTED)
+  lockedAt   DateTime?
+  lockedBy   String?
+  unlockedAt DateTime?
+  unlockedBy String?
+  note       String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@unique([year, month])
+}
+
+// ============================================================
+// 十三、修改紀錄（通用稽核軌跡）
+// ============================================================
+
+model ChangeLog {
+  id        String   @id @default(cuid())
+  tableName String // 目標資料表
+  recordId  String // 目標資料列 id
+  fieldName String? // 欄位（null 代表整筆異動，例如鎖定/解鎖）
+  oldValue  String?
+  newValue  String?
+  changedAt DateTime @default(now())
+  changedBy String?
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([tableName, recordId])
+}
