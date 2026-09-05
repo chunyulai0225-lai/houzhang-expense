@@ -93,8 +93,7 @@ model Person {
   substituteRecordsAsOriginal   SubstituteRecord[] @relation("RecordOriginalTeacher")
   substituteRecordsAsSubstitute SubstituteRecord[] @relation("RecordSubstituteTeacher")
 
-  suggestedInImportRows StaffDirectoryImportRow[] @relation("ImportRowSuggestedPerson")
-  matchedInImportRows   StaffDirectoryImportRow[] @relation("ImportRowMatchedPerson")
+  matchedInImportRows StaffDirectoryImportRow[] @relation("ImportRowMatchedPerson")
 
   @@index([enrollmentStatus])
 }
@@ -506,10 +505,6 @@ model StaffDirectoryImportRow {
   departmentName String? // 部門名稱（原始，即身分類別來源文字）
   categoryCode   String? // 若 PDF 另有可辨識的分類代碼（例如 B/D），先保留欄位、不強制使用
   schoolYear     Int? // PDF 對應的學年度（由匯入時人工指定，PDF本身未必有）
-
-  // 系統依姓名比對「建議」的既有人員，僅供管理者參考，不會自動套用
-  suggestedPersonId String?
-  suggestedPerson   Person? @relation("ImportRowSuggestedPerson", fields: [suggestedPersonId], references: [id])
 
   matchStatus         ImportRowMatchStatus @default(PENDING)
   matchedPersonId     String? // 管理者確認後，實際配對到／建立的 Person

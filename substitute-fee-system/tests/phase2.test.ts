@@ -8,7 +8,12 @@ import {
   getPersonDetail,
   listPersons,
 } from "../src/services/personService";
-import { resolveImportRow, startStaffDirectoryImport } from "../src/services/staffDirectoryImportService";
+import {
+  getCandidatePersonsForRow,
+  listImportRows,
+  resolveImportRow,
+  startStaffDirectoryImport,
+} from "../src/services/staffDirectoryImportService";
 
 const cleanupPersonIds: string[] = [];
 
@@ -111,7 +116,7 @@ describe("人員停用（離校）", () => {
 });
 
 describe("教職員工代號 PDF 匯入架構", () => {
-  it("姓名與既有人員相符時只建議配對，需管理者確認才會寫入 PersonCode", async () => {
+  it("姓名與既有人員相符時只列為候選，需管理者確認才會寫入 PersonCode", async () => {
     const wang = await prisma.person.findFirstOrThrow({ where: { name: "王○○" } });
     const codesBefore = await prisma.personCode.count({ where: { personId: wang.id } });
 
@@ -122,8 +127,9 @@ describe("教職員工代號 PDF 匯入架構", () => {
     });
 
     const row = batch.rows[0];
-    expect(row.suggestedPersonId).toBe(wang.id);
     expect(row.matchStatus).toBe("PENDING");
+    const candidates = await getCandidatePersonsForRow(row.id);
+    expect(candidates.map((c) => c.id)).toEqual([wang.id]);
     // 尚未確認前不應該有新的 PersonCode
     expect(await prisma.personCode.count({ where: { personId: wang.id } })).toBe(codesBefore);
 
@@ -135,6 +141,8 @@ describe("教職員工代號 PDF 匯入架構", () => {
       where: { personId: wang.id, originalStaffCode: "E9001" },
     });
     expect(newCode?.categoryName).toBe("課後照顧");
+    // categoryCode 暫不自動推導、也不要求手動輸入
+    expect(newCode?.categoryCode).toBeNull();
   });
 
   it("找不到既有人員時不會自動建立，且不能重複處理同一列", async () => {
@@ -144,7 +152,7 @@ describe("教職員工代號 PDF 匯入架構", () => {
       rows: [{ rowNumber: 1, employeeCode: "E9002", name: "測試新進人員丙", departmentName: "增置教師" }],
     });
     const row = batch.rows[0];
-    expect(row.suggestedPersonId).toBeNull();
+    expect(await getCandidatePersonsForRow(row.id)).toEqual([]);
 
     const beforeCount = await prisma.person.count({ where: { name: "測試新進人員丙" } });
     expect(beforeCount).toBe(0);
@@ -157,5 +165,55 @@ describe("教職員工代號 PDF 匯入架構", () => {
     expect(created.id).toBe(resolved.matchedPersonId);
 
     await expect(resolveImportRow(row.id, { action: "IGNORE" })).rejects.toThrow();
+  });
+
+  it("同一批匯入中，同一新人出現兩列：第一列建立新人，第二列可以找到第一列建立的人並配對", async () => {
+    const batch = await startStaffDirectoryImport({
+      fileName: "教職員工代號_測試3.pdf",
+      importedBy: "測試",
+      rows: [
+        { rowNumber: 1, employeeCode: "E9101", name: "測試多列丁", departmentName: "課後照顧" },
+        { rowNumber: 2, employeeCode: "E9102", name: "測試多列丁", departmentName: "攜手計畫" },
+      ],
+    });
+    const [row1, row2] = batch.rows;
+
+    // 匯入當下，這個人在系統裡完全不存在，兩列都還沒有候選人
+    expect(await getCandidatePersonsForRow(row1.id)).toEqual([]);
+    expect(await getCandidatePersonsForRow(row2.id)).toEqual([]);
+
+    const resolvedRow1 = await resolveImportRow(row1.id, { action: "CREATE_NEW" }, "測試管理者");
+    expect(resolvedRow1.matchStatus).toBe("CREATED_NEW");
+    const newPersonId = resolvedRow1.matchedPersonId!;
+    cleanupPersonIds.push(newPersonId);
+
+    // 第一列確認建立新人後，第二列重新查詢候選人時應該立即看得到剛建立的人
+    const candidatesForRow2 = await getCandidatePersonsForRow(row2.id);
+    expect(candidatesForRow2.map((c) => c.id)).toEqual([newPersonId]);
+
+    // 仍然不自動合併：由管理者明確選擇配對到剛建立的人
+    const resolvedRow2 = await resolveImportRow(row2.id, { action: "MATCH_EXISTING", personId: newPersonId }, "測試管理者");
+    expect(resolvedRow2.matchStatus).toBe("MATCHED_EXISTING");
+    expect(resolvedRow2.matchedPersonId).toBe(newPersonId);
+
+    // 最終只有一個 Person，底下有兩筆 PersonCode（課後照顧／攜手計畫）
+    expect(await prisma.person.count({ where: { name: "測試多列丁" } })).toBe(1);
+    const codes = await prisma.personCode.findMany({ where: { personId: newPersonId } });
+    expect(codes.map((c) => c.categoryName).sort()).toEqual(["攜手計畫", "課後照顧"]);
+  });
+
+  it("listImportRows 會回傳每一列的即時候選清單", async () => {
+    const wang = await prisma.person.findFirstOrThrow({ where: { name: "王○○" } });
+    const batch = await startStaffDirectoryImport({
+      fileName: "教職員工代號_測試4.pdf",
+      importedBy: "測試",
+      rows: [{ rowNumber: 1, employeeCode: "E9103", name: "王○○", departmentName: "攜手計畫" }],
+    });
+    const listed = await listImportRows(batch.id, "PENDING");
+    expect(listed).toHaveLength(1);
+    expect(listed[0].candidates.map((c) => c.id)).toEqual([wang.id]);
+
+    // 清理：略過此測試列避免污染王○○的 PersonCode
+    await resolveImportRow(listed[0].row.id, { action: "IGNORE" });
   });
 });
