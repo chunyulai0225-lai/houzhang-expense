@@ -12,8 +12,12 @@ import { prisma } from "../prismaClient";
 export type PersonListFilter = "ENROLLED" | "NOT_ENROLLED" | "ALL";
 
 // 1. 人員列表：預設只顯示在校人員，可切換 全部／在校／不在校
-export async function listPersons(filter: PersonListFilter = "ENROLLED") {
-  const where = filter === "ALL" ? {} : { enrollmentStatus: filter as EnrollmentStatus };
+// search：姓名模糊搜尋（供 Phase 5 規則管理介面的「搜尋教師」使用）
+export async function listPersons(filter: PersonListFilter = "ENROLLED", search?: string) {
+  const where = {
+    ...(filter === "ALL" ? {} : { enrollmentStatus: filter as EnrollmentStatus }),
+    ...(search ? { name: { contains: search } } : {}),
+  };
   return prisma.person.findMany({
     where,
     orderBy: { name: "asc" },

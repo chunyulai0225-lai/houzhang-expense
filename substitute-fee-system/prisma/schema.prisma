@@ -202,17 +202,21 @@ model PeriodSlot {
 // 六、專案
 // ============================================================
 
+// Phase 5 範圍只做「專案基本資料與規則設定」，不做計費。
+// 之前（Phase 1）曾經在這裡放 feeTypeLabel/unitPrice 兩個欄位，
+// 但專案的扣除公式、是否採用不同費率都還沒確認（見 PRD 待確認事項⑤），
+// 若繼續放在 Project 上的單一欄位，之後改價會跟 Phase 4 才解決的
+// 「改價不能影響歷史月份」問題一樣重演一次。所以先移除，等專案計費規則
+// 確定後，會用跟 FeeRule 一致的「有效日期版本」方式管理，而不是覆蓋單一欄位。
 model Project {
-  id           String   @id @default(cuid())
-  semesterId   String
-  semester     Semester @relation(fields: [semesterId], references: [id])
-  name         String // 例如「輔導團減課」
-  feeTypeLabel String // 自訂費用類型名稱（各專案單價可能不同，不共用 FeeRule）
-  unitPrice    Decimal
-  isActive     Boolean  @default(true)
-  note         String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id         String   @id @default(cuid())
+  semesterId String
+  semester   Semester @relation(fields: [semesterId], references: [id])
+  name       String // 例如「輔導團減課」，不寫死
+  isActive   Boolean  @default(true)
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   specialWeeklyRules SpecialWeeklyRule[]
   specialDateRules   SpecialDateRule[]
@@ -283,8 +287,14 @@ model SpecialDateRule {
   projectId                  String?
   project                    Project?               @relation(fields: [projectId], references: [id])
   note                       String?
-  createdAt                  DateTime               @default(now())
-  updatedAt                  DateTime               @updatedAt
+
+  // 生效／取消狀態：取消時不刪除資料列，只標記取消，歷史仍可追查
+  isCancelled Boolean   @default(false)
+  cancelledAt DateTime?
+  cancelledBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([semesterId, personId, date, periodCode])
 }

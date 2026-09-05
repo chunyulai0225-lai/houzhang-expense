@@ -1,0 +1,45 @@
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { font-family: "Microsoft JhengHei", "PingFang TC", sans-serif; margin: 0; background: #f4f6f8; color: #222; }
+header { background: #1b3a5c; color: white; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+header h1 { font-size: 18px; margin: 0; }
+.topbar { display: flex; gap: 16px; align-items: center; font-size: 13px; }
+.topbar label { display: flex; gap: 6px; align-items: center; }
+.topbar select, .topbar input { padding: 4px 6px; }
+
+.tabs { display: flex; gap: 4px; padding: 10px 20px 0; background: #e6ebf0; }
+.tab-btn { padding: 8px 16px; border: none; background: #d6dee5; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 14px; }
+.tab-btn.active { background: white; font-weight: bold; }
+
+main { padding: 16px 20px; }
+.tab-panel { display: none; background: white; padding: 16px; border-radius: 0 6px 6px 6px; }
+.tab-panel.active { display: block; }
+
+.subtabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.subtab-btn { padding: 6px 14px; border: 1px solid #1b3a5c; background: white; color: #1b3a5c; border-radius: 4px; cursor: pointer; }
+.subtab-btn.active { background: #1b3a5c; color: white; }
+
+.filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+.filters input, .filters select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; }
+.filters button, table button { padding: 6px 12px; border: none; border-radius: 4px; background: #1b3a5c; color: white; cursor: pointer; }
+.filters button:hover, table button:hover { background: #285886; }
+table button.danger { background: #a83232; }
+table button.danger:hover { background: #c93f3f; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { border: 1px solid #e0e0e0; padding: 6px 8px; text-align: left; }
+th { background: #f0f3f6; }
+tr.conflict-row { background: #fff2ef; }
+tr.inactive-row { color: #999; }
+
+.conflict-banner { background: #fdecea; border: 1px solid #e0736a; color: #8a2b21; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; }
+
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); align-items: center; justify-content: center; }
+.modal-backdrop:not([hidden]) { display: flex; }
+.modal-box { background: white; padding: 20px; border-radius: 8px; width: 420px; max-height: 90vh; overflow-y: auto; }
+.modal-box h2 { margin-top: 0; font-size: 16px; }
+.modal-box label { display: block; margin-bottom: 10px; font-size: 13px; }
+.modal-box input, .modal-box select, .modal-box textarea { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; margin-top: 4px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.modal-actions button.secondary { background: #999; }
+.error-text { color: #a83232; font-size: 12px; margin-top: 6px; }

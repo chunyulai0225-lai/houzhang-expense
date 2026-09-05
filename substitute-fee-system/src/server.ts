@@ -1,0 +1,221 @@
+// Phase 5：超鐘點／專案設定的基本管理介面（後端 API + 靜態頁面）
+//
+// 這是目前系統唯一的「使用者介面」，刻意保持簡單：一個 Express server
+// 把 Phase 1-5 已經寫好的 service 包成 JSON API，前端是不需要建置流程的
+// 純 HTML/JS（public/ 目錄）。行政人員好操作優先，不追求美觀。
+
+import express from "express";
+import path from "path";
+import { prisma } from "./prismaClient";
+import { createProject, listProjects, setProjectActive, updateProject } from "./services/projectService";
+import { listPersons } from "./services/personService";
+import {
+  createSpecialDateRule,
+  cancelSpecialDateRule,
+  listDateRules,
+} from "./services/specialDateRuleService";
+import {
+  createSpecialWeeklyRule,
+  deactivateSpecialWeeklyRule,
+  detectWeeklyRuleConflicts,
+  listWeeklyRules,
+  updateSpecialWeeklyRule,
+} from "./services/specialWeeklyRuleService";
+
+const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "..", "public")));
+
+function asDate(value: unknown): Date | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  return new Date(String(value));
+}
+
+function handleError(res: express.Response, err: unknown) {
+  const message = err instanceof Error ? err.message : "未知錯誤";
+  res.status(400).json({ error: message });
+}
+
+// ---- 基礎資料：學期／人員／節次代碼 ----
+
+app.get("/api/semesters", async (_req, res) => {
+  const semesters = await prisma.semester.findMany({
+    orderBy: [{ schoolYear: "desc" }, { term: "desc" }],
+  });
+  res.json(semesters);
+});
+
+app.get("/api/persons", async (req, res) => {
+  const search = typeof req.query.search === "string" ? req.query.search : undefined;
+  const persons = await listPersons("ALL", search);
+  res.json(persons);
+});
+
+app.get("/api/period-slots", async (_req, res) => {
+  const slots = await prisma.periodSlot.findMany({ orderBy: { sortOrder: "asc" } });
+  res.json(slots);
+});
+
+// ---- 專案 ----
+
+app.get("/api/projects", async (req, res) => {
+  const semesterId = String(req.query.semesterId ?? "");
+  if (!semesterId) return res.status(400).json({ error: "缺少 semesterId" });
+  const projects = await listProjects(semesterId);
+  res.json(projects);
+});
+
+app.post("/api/projects", async (req, res) => {
+  try {
+    const { semesterId, name, note, changedBy } = req.body;
+    const project = await createProject({ semesterId, name, note }, changedBy);
+    res.json(project);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.patch("/api/projects/:id", async (req, res) => {
+  try {
+    const { name, note, changedBy, reason } = req.body;
+    const project = await updateProject(req.params.id, { name, note }, changedBy, reason);
+    res.json(project);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.patch("/api/projects/:id/active", async (req, res) => {
+  try {
+    const { isActive, changedBy, reason } = req.body;
+    const project = await setProjectActive(req.params.id, Boolean(isActive), changedBy, reason);
+    res.json(project);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// ---- 每週固定規則（超鐘點／專案）----
+
+app.get("/api/weekly-rules", async (req, res) => {
+  const semesterId = String(req.query.semesterId ?? "");
+  if (!semesterId) return res.status(400).json({ error: "缺少 semesterId" });
+  const rules = await listWeeklyRules(semesterId, {
+    personId: req.query.personId ? String(req.query.personId) : undefined,
+    ruleType: req.query.ruleType ? (String(req.query.ruleType) as any) : undefined,
+    weekday: req.query.weekday ? (String(req.query.weekday) as any) : undefined,
+    projectId: req.query.projectId ? String(req.query.projectId) : undefined,
+  });
+  res.json(rules);
+});
+
+app.get("/api/weekly-rules/conflicts", async (req, res) => {
+  const semesterId = String(req.query.semesterId ?? "");
+  if (!semesterId) return res.status(400).json({ error: "缺少 semesterId" });
+  const conflicts = await detectWeeklyRuleConflicts(
+    semesterId,
+    req.query.personId ? String(req.query.personId) : undefined
+  );
+  res.json(conflicts);
+});
+
+app.post("/api/weekly-rules", async (req, res) => {
+  try {
+    const body = req.body;
+    const result = await createSpecialWeeklyRule(
+      {
+        semesterId: body.semesterId,
+        personId: body.personId,
+        ruleType: body.ruleType,
+        projectId: body.projectId || undefined,
+        weekday: body.weekday,
+        periodCode: body.periodCode,
+        subject: body.subject || undefined,
+        weeklyPeriods: body.weeklyPeriods,
+        effectiveDate: asDate(body.effectiveDate)!,
+        endDate: asDate(body.endDate),
+        note: body.note || undefined,
+      },
+      body.changedBy
+    );
+    res.json(result);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.patch("/api/weekly-rules/:id", async (req, res) => {
+  try {
+    const body = req.body;
+    const changes: Record<string, unknown> = {};
+    for (const key of ["ruleType", "projectId", "weekday", "periodCode", "subject", "weeklyPeriods", "note"]) {
+      if (key in body) changes[key] = body[key] === "" ? null : body[key];
+    }
+    if ("effectiveDate" in body) changes.effectiveDate = asDate(body.effectiveDate);
+    if ("endDate" in body) changes.endDate = asDate(body.endDate) ?? null;
+
+    const result = await updateSpecialWeeklyRule(req.params.id, changes, body.changedBy, body.reason);
+    res.json(result);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/weekly-rules/:id/deactivate", async (req, res) => {
+  try {
+    const { endDate, changedBy, reason } = req.body;
+    const rule = await deactivateSpecialWeeklyRule(req.params.id, asDate(endDate)!, changedBy, reason);
+    res.json(rule);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// ---- 單日例外 ----
+
+app.get("/api/date-rules", async (req, res) => {
+  const semesterId = String(req.query.semesterId ?? "");
+  if (!semesterId) return res.status(400).json({ error: "缺少 semesterId" });
+  const rules = await listDateRules(semesterId, {
+    personId: req.query.personId ? String(req.query.personId) : undefined,
+    includeCancelled: req.query.includeCancelled === "true",
+  });
+  res.json(rules);
+});
+
+app.post("/api/date-rules", async (req, res) => {
+  try {
+    const body = req.body;
+    const rule = await createSpecialDateRule(
+      {
+        semesterId: body.semesterId,
+        date: asDate(body.date)!,
+        personId: body.personId,
+        periodCode: body.periodCode,
+        overrideClassification: body.overrideClassification,
+        projectId: body.projectId || undefined,
+        originalClassificationNote: body.originalClassificationNote || undefined,
+        note: body.note || undefined,
+      },
+      body.changedBy
+    );
+    res.json(rule);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/date-rules/:id/cancel", async (req, res) => {
+  try {
+    const { changedBy, reason } = req.body;
+    const rule = await cancelSpecialDateRule(req.params.id, changedBy, reason);
+    res.json(rule);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+const port = Number(process.env.PORT ?? 3000);
+app.listen(port, () => {
+  console.log(`Phase 5 管理介面已啟動：http://localhost:${port}`);
+});

@@ -126,7 +126,7 @@ async function main() {
 
   // ---- 專案 ----
   const guidanceProject = await prisma.project.create({
-    data: { semesterId: sem115_1.id, name: "輔導團減課", feeTypeLabel: "輔導團減課鐘點", unitPrice: 405 },
+    data: { semesterId: sem115_1.id, name: "輔導團減課" },
   });
 
   // ---- 每週固定規則：超鐘點（陳心啓／星期二／第2節）與專案（蘇珍慧／星期三／第5節）----

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<title>超鐘點／專案設定</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>超鐘點／專案設定</h1>
+    <div class="topbar">
+      <label>學期
+        <select id="semesterSelect"></select>
+      </label>
+      <label>操作人
+        <input id="changedByInput" type="text" placeholder="例如：教學組" />
+      </label>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="weekly">每週固定規則</button>
+    <button class="tab-btn" data-tab="projects">專案</button>
+    <button class="tab-btn" data-tab="dateRules">單日例外</button>
+  </nav>
+
+  <main>
+    <!-- 每週固定規則（超鐘點／專案共用） -->
+    <section id="tab-weekly" class="tab-panel active">
+      <div class="subtabs">
+        <button class="subtab-btn active" data-ruletype="OVERTIME">超鐘點</button>
+        <button class="subtab-btn" data-ruletype="PROJECT">專案</button>
+      </div>
+
+      <div id="conflictBanner" class="conflict-banner" hidden></div>
+
+      <div class="filters">
+        <input id="filterTeacher" type="text" placeholder="搜尋教師姓名" />
+        <select id="filterWeekday">
+          <option value="">全部星期</option>
+          <option value="MON">星期一</option>
+          <option value="TUE">星期二</option>
+          <option value="WED">星期三</option>
+          <option value="THU">星期四</option>
+          <option value="FRI">星期五</option>
+        </select>
+        <select id="filterProject">
+          <option value="">全部專案</option>
+        </select>
+        <button id="btnNewWeeklyRule">＋ 新增規則</button>
+      </div>
+
+      <table id="weeklyRuleTable">
+        <thead>
+          <tr>
+            <th>教師</th><th>星期</th><th>節次</th><th>科目</th><th>類型</th><th>專案</th>
+            <th>每週節數</th><th>生效日期</th><th>結束日期</th><th>狀態</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 專案基本資料 -->
+    <section id="tab-projects" class="tab-panel">
+      <div class="filters">
+        <button id="btnNewProject">＋ 新增專案</button>
+      </div>
+      <table id="projectTable">
+        <thead><tr><th>專案名稱</th><th>狀態</th><th>備註</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 單日例外 -->
+    <section id="tab-dateRules" class="tab-panel">
+      <div class="filters">
+        <label><input id="filterIncludeCancelled" type="checkbox" /> 顯示已取消</label>
+        <button id="btnNewDateRule">＋ 新增單日例外</button>
+      </div>
+      <table id="dateRuleTable">
+        <thead><tr><th>日期</th><th>教師</th><th>節次</th><th>改判為</th><th>專案</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <div id="modalBackdrop" class="modal-backdrop" hidden>
+    <div id="modalBox" class="modal-box"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
