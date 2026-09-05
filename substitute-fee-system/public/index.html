@@ -25,6 +25,8 @@
     <button class="tab-btn" data-tab="calendar">學校上課日曆</button>
     <button class="tab-btn" data-tab="importExcel">公費代課匯入</button>
     <button class="tab-btn" data-tab="classification">分類預覽</button>
+    <button class="tab-btn" data-tab="feeRules">費用規則</button>
+    <button class="tab-btn" data-tab="feeCalculation">費用計算</button>
   </nav>
 
   <main>
@@ -196,6 +198,41 @@
           <tr>
             <th>日期</th><th>原教師</th><th>節次</th><th>班級</th><th>科目</th><th>代課教師</th>
             <th>BD/非BD</th><th>自動分類</th><th>規則來源</th><th>專案</th><th>狀態</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <!-- Phase 9 第一階段：費用規則（只管理 SUBSTITUTE_PERIOD / OVERTIME_PERIOD，版本化、不可覆蓋舊資料） -->
+    <section id="tab-feeRules" class="tab-panel">
+      <div class="filters">
+        <select id="feeRuleTypeSelect">
+          <option value="SUBSTITUTE_PERIOD">一般公費／專案代課鐘點（SUBSTITUTE_PERIOD）</option>
+          <option value="OVERTIME_PERIOD">超鐘點（OVERTIME_PERIOD）</option>
+        </select>
+        <button id="btnNewFeeRule">＋ 新增費率版本</button>
+      </div>
+      <p class="hint">專案代課／回兼目前沿用「SUBSTITUTE_PERIOD」這張費率表，不是獨立費率。代導師費／日薪／半日薪這三種 FeeType 保留但第一階段不開放在這裡新增，也不會進入費用計算。</p>
+      <table id="feeRuleTable">
+        <thead><tr><th>金額</th><th>生效日期</th><th>結束日期</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- Phase 9 第一階段：節次型費用計算（只算 GENERAL/OVERTIME/PROJECT） -->
+    <section id="tab-feeCalculation" class="tab-panel">
+      <div class="filters">
+        <select id="feeCalcPeriodSelect"></select>
+        <button id="btnRunFeeCalculation">執行費用計算</button>
+      </div>
+      <p class="hint">只計算分類結果為一般公費／超鐘點／專案的紀錄；規則衝突、原教師未配對、尚未分類的資料不會被計算，金額維持空白。代導師費／日薪／半日薪／自費代課／專案上限尚未實作。</p>
+      <div id="feeCalcSummaryMsg" class="import-result" hidden></div>
+      <table id="feeSummaryTable">
+        <thead>
+          <tr>
+            <th>代課教師</th><th>一般公費節數</th><th>一般公費金額</th>
+            <th>超鐘點節數</th><th>超鐘點金額</th><th>專案節數</th><th>專案金額</th>
+            <th>合計節數</th><th>合計金額</th>
           </tr>
         </thead>
         <tbody></tbody>

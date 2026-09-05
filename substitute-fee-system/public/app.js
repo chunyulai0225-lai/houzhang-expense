@@ -29,6 +29,12 @@ const state = {
   importPeriod: null, // { year, month }
   currentImportId: null,
   classificationBatchId: null,
+  feeCalcPeriod: null, // { year, month }
+};
+
+const FEE_TYPE_LABEL = {
+  SUBSTITUTE_PERIOD: "一般公費／專案代課鐘點",
+  OVERTIME_PERIOD: "超鐘點",
 };
 
 function getCurrentSemester() {
@@ -137,6 +143,15 @@ async function init() {
     qs(`#${id}`).addEventListener("change", loadClassificationPreview)
   );
 
+  qs("#feeRuleTypeSelect").addEventListener("change", loadFeeRules);
+  qs("#btnNewFeeRule").addEventListener("click", () => openFeeRuleForm());
+
+  qs("#feeCalcPeriodSelect").addEventListener("change", (e) => {
+    const [year, month] = e.target.value.split("-").map(Number);
+    state.feeCalcPeriod = { year, month };
+  });
+  qs("#btnRunFeeCalculation").addEventListener("click", runFeeCalculation);
+
   const semesters = await api("/api/semesters");
   state.semesters = semesters;
   const select = qs("#semesterSelect");
@@ -177,6 +192,8 @@ async function loadForSemester() {
   setupImportPeriodOptions();
   await Promise.all([loadWeeklyRules(), loadProjects(), loadDateRules(), loadCalendar(), loadImportBatches()]);
   await setupClassificationBatchOptions();
+  await loadFeeRules();
+  setupFeeCalcPeriodOptions();
 }
 
 // ---------- 每週固定規則 ----------
@@ -999,6 +1016,155 @@ function openOverrideClassificationForm(record) {
       showFormError(err.message);
     }
   });
+}
+
+// ---------- Phase 9 第一階段：費用規則 ----------
+
+async function loadFeeRules() {
+  if (!state.semesterId) return;
+  const feeType = qs("#feeRuleTypeSelect").value;
+  const rules = await api(`/api/fee-rules?semesterId=${state.semesterId}&feeType=${feeType}`);
+  const today = new Date().toISOString().slice(0, 10);
+  const tbody = qs("#feeRuleTable tbody");
+  tbody.innerHTML = rules
+    .slice()
+    .reverse()
+    .map((r) => {
+      const isInactive = r.endDate && dateOnly(r.endDate) < today;
+      return `
+        <tr class="${isInactive ? "inactive-row" : ""}" data-id="${r.id}">
+          <td>${r.amount}</td>
+          <td>${dateOnly(r.effectiveDate)}</td>
+          <td>${r.endDate ? dateOnly(r.endDate) : ""}</td>
+          <td>${r.note ?? ""}</td>
+          <td>${isInactive ? "已停用/已過期" : "生效中"}</td>
+          <td>${isInactive ? "" : `<button data-action="deactivate">停用</button>`}</td>
+        </tr>`;
+    })
+    .join("");
+
+  tbody.querySelectorAll("button[data-action='deactivate']").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const id = btn.closest("tr").dataset.id;
+      const endDate = prompt("請輸入停用日期（YYYY-MM-DD），此日期之後這筆費率就不再生效：");
+      if (!endDate) return;
+      try {
+        await api(`/api/fee-rules/${id}/deactivate`, {
+          method: "POST",
+          body: JSON.stringify({ endDate, changedBy: state.changedBy || undefined, reason: "透過管理介面停用" }),
+        });
+        await loadFeeRules();
+      } catch (err) {
+        alert(err.message);
+      }
+    })
+  );
+}
+
+function openFeeRuleForm() {
+  const feeType = qs("#feeRuleTypeSelect").value;
+  const body = `
+    <h2>新增費率版本：${FEE_TYPE_LABEL[feeType] || feeType}</h2>
+    <label>金額（元／節）<input id="f-amount" type="number" step="0.01" /></label>
+    <label>生效日期<input id="f-effectiveDate" type="date" /></label>
+    <label>結束日期（選填）<input id="f-endDate" type="date" /></label>
+    <label>備註<textarea id="f-note"></textarea></label>
+    <div class="error-text" id="f-error" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="f-cancel">取消</button>
+      <button type="button" id="f-submit">儲存</button>
+    </div>`;
+  showModal(body);
+  qs("#f-cancel").addEventListener("click", closeModal);
+  qs("#f-submit").addEventListener("click", async () => {
+    try {
+      const amount = qs("#f-amount").value;
+      const effectiveDate = qs("#f-effectiveDate").value;
+      if (!amount) throw new Error("請輸入金額");
+      if (!effectiveDate) throw new Error("請輸入生效日期");
+      await api("/api/fee-rules", {
+        method: "POST",
+        body: JSON.stringify({
+          semesterId: state.semesterId,
+          feeType,
+          amount,
+          effectiveDate,
+          endDate: qs("#f-endDate").value || undefined,
+          note: qs("#f-note").value.trim() || undefined,
+          changedBy: state.changedBy || undefined,
+        }),
+      });
+      closeModal();
+      await loadFeeRules();
+    } catch (err) {
+      showFormError(err.message);
+    }
+  });
+}
+
+// ---------- Phase 9 第一階段：節次型費用計算 ----------
+
+function setupFeeCalcPeriodOptions() {
+  const semester = getCurrentSemester();
+  if (!semester) return;
+  const months = monthRange(semester.startDate, semester.endDate);
+  const select = qs("#feeCalcPeriodSelect");
+  select.innerHTML = months.map((m) => `<option value="${m.year}-${m.month}">${m.year}年${m.month}月</option>`).join("");
+  const hasCurrent = state.feeCalcPeriod && months.some((m) => m.year === state.feeCalcPeriod.year && m.month === state.feeCalcPeriod.month);
+  const chosen = hasCurrent ? state.feeCalcPeriod : months[0];
+  if (chosen) {
+    select.value = `${chosen.year}-${chosen.month}`;
+    state.feeCalcPeriod = chosen;
+  }
+}
+
+// 對「這個學期＋這個年月」下所有匯入批次（BD／非BD 都算進去）先算金額，再彙總成
+// 「代課教師 × fundingSource」的月結表。只計算 GENERAL/OVERTIME/PROJECT，
+// 規則衝突／原教師未配對／尚未分類的資料維持不計算。
+async function runFeeCalculation() {
+  if (!state.semesterId || !state.feeCalcPeriod) return;
+  const msgEl = qs("#feeCalcSummaryMsg");
+  msgEl.hidden = false;
+  msgEl.textContent = "計算中…";
+
+  const batches = await api(`/api/monthly-imports?semesterId=${state.semesterId}`);
+  const targetBatches = batches.filter(
+    (b) => b.year === state.feeCalcPeriod.year && b.month === state.feeCalcPeriod.month && b.status === "ACTIVE"
+  );
+  if (targetBatches.length === 0) {
+    msgEl.textContent = "這個年月沒有有效的匯入批次，請先到「公費代課匯入」上傳並完成分類。";
+    qs("#feeSummaryTable tbody").innerHTML = "";
+    return;
+  }
+
+  for (const b of targetBatches) {
+    await api(`/api/monthly-imports/${b.id}/calculate-fees`, {
+      method: "POST",
+      body: JSON.stringify({ changedBy: state.changedBy || undefined }),
+    });
+  }
+
+  const ids = targetBatches.map((b) => b.id).join(",");
+  const summary = await api(`/api/monthly-imports/fee-summary?ids=${ids}`);
+  msgEl.textContent = `已計算 ${targetBatches.length} 個批次，共 ${summary.length} 位代課教師有金額紀錄。`;
+
+  const tbody = qs("#feeSummaryTable tbody");
+  tbody.innerHTML = summary
+    .map(
+      (r) => `
+      <tr>
+        <td>${r.substituteTeacherName}</td>
+        <td>${r.generalCount}</td>
+        <td>${r.generalAmount}</td>
+        <td>${r.overtimeCount}</td>
+        <td>${r.overtimeAmount}</td>
+        <td>${r.projectCount}</td>
+        <td>${r.projectAmount}</td>
+        <td>${r.totalCount}</td>
+        <td>${r.totalAmount}</td>
+      </tr>`
+    )
+    .join("");
 }
 
 init();

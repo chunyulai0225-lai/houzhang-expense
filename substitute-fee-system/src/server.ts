@@ -47,6 +47,8 @@ import {
   overrideClassification,
   revertToAutoClassification,
 } from "./services/classificationService";
+import { createFeeRule, deactivateFeeRule, getFeeRuleHistory } from "./services/feeRuleService";
+import { calculateMonthlyImportFees, summarizeTeacherMonthlyFees } from "./services/feeCalculationService";
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -343,6 +345,23 @@ app.get("/api/monthly-imports", async (req, res) => {
   res.json(batches);
 });
 
+// 注意：必須放在 "/api/monthly-imports/:id" 之前註冊，否則 Express 會把
+// "fee-summary" 當成 :id 吃掉，永遠進不到這個路由。
+app.get("/api/monthly-imports/fee-summary", async (req, res) => {
+  try {
+    const idsParam = req.query.ids;
+    const ids = typeof idsParam === "string" ? idsParam.split(",").filter(Boolean) : [];
+    if (ids.length === 0) {
+      res.status(400).json({ error: "請提供 ids（以逗號分隔的 monthlyImportId 清單）" });
+      return;
+    }
+    const summary = await summarizeTeacherMonthlyFees(ids);
+    res.json(summary);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
 app.get("/api/monthly-imports/:id", async (req, res) => {
   try {
     const detail = await getMonthlyImportDetail(req.params.id);
@@ -418,6 +437,54 @@ app.post("/api/substitute-records/:id/revert-classification", async (req, res) =
     const { changedBy, reason } = req.body;
     const record = await revertToAutoClassification(req.params.id, changedBy || undefined, reason);
     res.json(record);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// ---- Phase 9 第一階段：費用規則管理 + 節次型費用計算 ----
+
+app.get("/api/fee-rules", async (req, res) => {
+  try {
+    const { semesterId, feeType } = req.query;
+    if (!semesterId || !feeType) {
+      res.status(400).json({ error: "semesterId 與 feeType 為必填" });
+      return;
+    }
+    const history = await getFeeRuleHistory(String(semesterId), String(feeType) as any);
+    res.json(history);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/fee-rules", async (req, res) => {
+  try {
+    const { semesterId, feeType, amount, effectiveDate, endDate, note, changedBy } = req.body;
+    const rule = await createFeeRule(
+      { semesterId, feeType, amount, effectiveDate: asDate(effectiveDate)!, endDate: asDate(endDate), note },
+      changedBy || undefined
+    );
+    res.json(rule);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/fee-rules/:id/deactivate", async (req, res) => {
+  try {
+    const { endDate, changedBy, reason } = req.body;
+    const rule = await deactivateFeeRule(req.params.id, asDate(endDate)!, changedBy || undefined, reason);
+    res.json(rule);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/monthly-imports/:id/calculate-fees", async (req, res) => {
+  try {
+    const results = await calculateMonthlyImportFees(req.params.id, req.body?.changedBy || undefined);
+    res.json(results);
   } catch (err) {
     handleError(res, err);
   }
