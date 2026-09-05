@@ -133,8 +133,11 @@ describe("每月鎖定狀態彼此獨立，歷史月份鎖定不影響其他月�
   });
 
   it("同一年月不可重複建立鎖定紀錄", async () => {
+    const existingJune = await prisma.monthlyLock.findUniqueOrThrow({ where: { year_month: { year: 2026, month: 6 } } });
     await expect(
-      prisma.monthlyLock.create({ data: { year: 2026, month: 6, status: "IMPORTED" } })
+      prisma.monthlyLock.create({
+        data: { year: 2026, month: 6, status: "IMPORTED", semesterId: existingJune.semesterId },
+      })
     ).rejects.toThrow();
   });
 });

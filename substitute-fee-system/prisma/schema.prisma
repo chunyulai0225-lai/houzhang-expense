@@ -93,6 +93,9 @@ model Person {
   substituteRecordsAsOriginal   SubstituteRecord[] @relation("RecordOriginalTeacher")
   substituteRecordsAsSubstitute SubstituteRecord[] @relation("RecordSubstituteTeacher")
 
+  suggestedInImportRows StaffDirectoryImportRow[] @relation("ImportRowSuggestedPerson")
+  matchedInImportRows   StaffDirectoryImportRow[] @relation("ImportRowMatchedPerson")
+
   @@index([enrollmentStatus])
 }
 
@@ -431,8 +434,8 @@ enum MonthlyStatus {
 
 model MonthlyLock {
   id         String        @id @default(cuid())
-  semesterId String?
-  semester   Semester?     @relation(fields: [semesterId], references: [id])
+  semesterId String
+  semester   Semester      @relation(fields: [semesterId], references: [id])
   year       Int
   month      Int
   status     MonthlyStatus @default(NOT_IMPORTED)
@@ -464,4 +467,61 @@ model ChangeLog {
   createdAt DateTime @default(now())
 
   @@index([tableName, recordId])
+}
+
+// ============================================================
+// 十四、教職員工代號 PDF 匯入（Phase 2）
+//
+// PDF 一列不是一個人：同一人可能因不同身分類別（代理教師／合理員額／
+// 課後照顧／增置教師／攜手計畫……）出現多列。匯入流程只負責把「原始列」
+// 存下來，再由管理者一列一列確認要「配對既有人員」還是「建立新人員」，
+// 確認後才會寫入 PersonCode；不會自動把 PDF 每一列建立成一個 Person。
+// ============================================================
+
+enum ImportRowMatchStatus {
+  PENDING // 尚待管理者確認
+  MATCHED_EXISTING // 已配對到既有人員
+  CREATED_NEW // 已建立為新人員
+  IGNORED // 管理者判斷此列不需要處理
+}
+
+model StaffDirectoryImport {
+  id         String   @id @default(cuid())
+  fileName   String
+  importedBy String?
+  importedAt DateTime @default(now())
+  totalCount Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  rows StaffDirectoryImportRow[]
+}
+
+model StaffDirectoryImportRow {
+  id             String               @id @default(cuid())
+  importId       String
+  import         StaffDirectoryImport @relation(fields: [importId], references: [id])
+  rowNumber      Int?
+  employeeCode   String // 員工代號（原始）
+  name           String // 姓名（原始）
+  departmentName String? // 部門名稱（原始，即身分類別來源文字）
+  categoryCode   String? // 若 PDF 另有可辨識的分類代碼（例如 B/D），先保留欄位、不強制使用
+  schoolYear     Int? // PDF 對應的學年度（由匯入時人工指定，PDF本身未必有）
+
+  // 系統依姓名比對「建議」的既有人員，僅供管理者參考，不會自動套用
+  suggestedPersonId String?
+  suggestedPerson   Person? @relation("ImportRowSuggestedPerson", fields: [suggestedPersonId], references: [id])
+
+  matchStatus         ImportRowMatchStatus @default(PENDING)
+  matchedPersonId     String? // 管理者確認後，實際配對到／建立的 Person
+  matchedPerson       Person?              @relation("ImportRowMatchedPerson", fields: [matchedPersonId], references: [id])
+  createdPersonCodeId String?
+
+  resolvedAt DateTime?
+  resolvedBy String?
+  note       String?
+  createdAt  DateTime  @default(now())
+
+  @@index([importId])
+  @@index([name])
+  @@index([matchStatus])
 }
