@@ -4,6 +4,15 @@
 const WEEKDAY_LABEL = { MON: "星期一", TUE: "星期二", WED: "星期三", THU: "星期四", FRI: "星期五" };
 const CLASSIFICATION_LABEL = { GENERAL: "一般公費", OVERTIME: "超鐘點", PROJECT: "專案" };
 const STAFF_TYPE_LABEL = { BD: "編制內(BD)", NON_BD: "編制外(非BD)", UNKNOWN: "未指定" };
+const FUNDING_SOURCE_LABEL = { GENERAL: "一般公費", OVERTIME: "超鐘點", PROJECT: "專案", UNDETERMINED: "待確認" };
+const CLASSIFICATION_METHOD_LABEL = {
+  WEEKLY_RULE: "週規則",
+  DATE_EXCEPTION: "單日例外",
+  GENERAL_DEFAULT: "無規則(一般公費)",
+  MANUAL_OVERRIDE: "人工覆寫",
+  CONFLICT: "規則衝突",
+  TEACHER_UNMATCHED: "原教師未配對",
+};
 
 const WEEKDAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 const WEEKDAY_LABEL_SHORT = { MON: "一", TUE: "二", WED: "三", THU: "四", FRI: "五", SAT: "六", SUN: "日" };
@@ -19,6 +28,7 @@ const state = {
   calendarMonth: null,
   importPeriod: null, // { year, month }
   currentImportId: null,
+  classificationBatchId: null,
 };
 
 function getCurrentSemester() {
@@ -103,6 +113,30 @@ async function init() {
     await loadUnmatchedForImport(state.currentImportId);
   });
 
+  qs("#classificationBatchSelect").addEventListener("change", (e) => {
+    state.classificationBatchId = e.target.value;
+    loadClassificationPreview();
+  });
+  qs("#btnRunClassification").addEventListener("click", async () => {
+    if (!state.classificationBatchId) {
+      alert("請先選擇要分類的匯入批次");
+      return;
+    }
+    const summary = await api(`/api/monthly-imports/${state.classificationBatchId}/classify`, {
+      method: "POST",
+      body: JSON.stringify({ changedBy: state.changedBy || undefined }),
+    });
+    const summaryEl = qs("#classificationSummary");
+    summaryEl.hidden = false;
+    summaryEl.textContent =
+      `共 ${summary.total} 筆｜一般公費 ${summary.general}｜超鐘點 ${summary.overtime}｜專案 ${summary.project}｜` +
+      `規則衝突 ${summary.conflict}｜原教師未配對 ${summary.teacherUnmatched}｜維持人工覆寫 ${summary.manualPreserved}`;
+    await loadClassificationPreview();
+  });
+  ["filterFundingSource", "filterClassificationMethod", "filterManualOverride", "filterStaffType"].forEach((id) =>
+    qs(`#${id}`).addEventListener("change", loadClassificationPreview)
+  );
+
   const semesters = await api("/api/semesters");
   state.semesters = semesters;
   const select = qs("#semesterSelect");
@@ -142,6 +176,7 @@ async function loadForSemester() {
   await setupCalendarMonthOptions();
   setupImportPeriodOptions();
   await Promise.all([loadWeeklyRules(), loadProjects(), loadDateRules(), loadCalendar(), loadImportBatches()]);
+  await setupClassificationBatchOptions();
 }
 
 // ---------- 每週固定規則 ----------
@@ -829,6 +864,141 @@ async function loadImportBatches() {
       await loadUnmatchedForImport(detail.id);
     })
   );
+}
+
+// ---------- Phase 8：分類預覽 ----------
+
+async function setupClassificationBatchOptions() {
+  if (!state.semesterId) return;
+  const batches = await api(`/api/monthly-imports?semesterId=${state.semesterId}`);
+  const select = qs("#classificationBatchSelect");
+  select.innerHTML = batches
+    .map(
+      (b) =>
+        `<option value="${b.id}">${b.year}年${b.month}月 ${STAFF_TYPE_LABEL[b.sourceStaffType] || b.sourceStaffType} v${b.versionNo}${b.status === "SUPERSEDED" ? "（已取代）" : ""}</option>`
+    )
+    .join("");
+  const hasCurrent = state.classificationBatchId && batches.some((b) => b.id === state.classificationBatchId);
+  if (!hasCurrent) {
+    state.classificationBatchId = batches[0]?.id ?? null;
+  }
+  if (state.classificationBatchId) select.value = state.classificationBatchId;
+  await loadClassificationPreview();
+}
+
+async function loadClassificationPreview() {
+  if (!state.classificationBatchId) {
+    qs("#classificationTable tbody").innerHTML = "";
+    return;
+  }
+  const params = new URLSearchParams();
+  const fundingSource = qs("#filterFundingSource").value;
+  const classificationMethod = qs("#filterClassificationMethod").value;
+  const isManuallyModified = qs("#filterManualOverride").value;
+  const staffType = qs("#filterStaffType").value;
+  if (fundingSource) params.set("fundingSource", fundingSource);
+  if (classificationMethod) params.set("classificationMethod", classificationMethod);
+  if (isManuallyModified) params.set("isManuallyModified", isManuallyModified);
+  if (staffType) params.set("staffType", staffType);
+
+  const records = await api(`/api/monthly-imports/${state.classificationBatchId}/classification-preview?${params.toString()}`);
+  const tbody = qs("#classificationTable tbody");
+  tbody.innerHTML = records
+    .map((r) => {
+      let status;
+      if (r.isManuallyModified) status = "✅ 已人工覆寫";
+      else if (r.classificationMethod === "CONFLICT") status = "⚠️ 規則衝突，需確認";
+      else if (r.classificationMethod === "TEACHER_UNMATCHED") status = "⚠️ 原教師未配對";
+      else status = "系統判斷";
+
+      return `
+        <tr class="${r.classificationMethod === "CONFLICT" || r.classificationMethod === "TEACHER_UNMATCHED" ? "conflict-row" : ""}" data-id="${r.id}">
+          <td>${dateOnly(r.date)}</td>
+          <td>${r.originalTeacher?.name ?? "（未配對）"}</td>
+          <td>${r.periodCode ?? ""}</td>
+          <td>${r.className ?? ""}</td>
+          <td>${r.subject ?? ""}</td>
+          <td>${r.substituteTeacher?.name ?? "（未配對）"}</td>
+          <td>${STAFF_TYPE_LABEL[r.staffType] || r.staffType}</td>
+          <td>${FUNDING_SOURCE_LABEL[r.fundingSource] || r.fundingSource}</td>
+          <td>${CLASSIFICATION_METHOD_LABEL[r.classificationMethod] || r.classificationMethod}</td>
+          <td>${r.project?.name ?? ""}</td>
+          <td>${status}</td>
+          <td>
+            <button data-action="override">覆寫</button>
+            ${r.isManuallyModified ? `<button data-action="revert" class="danger">復原</button>` : ""}
+          </td>
+        </tr>`;
+    })
+    .join("");
+
+  tbody.querySelectorAll("button[data-action='override']").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      const record = records.find((r) => r.id === id);
+      openOverrideClassificationForm(record);
+    })
+  );
+  tbody.querySelectorAll("button[data-action='revert']").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      const reason = prompt("復原原因：");
+      if (!reason) return;
+      try {
+        await api(`/api/substitute-records/${id}/revert-classification`, {
+          method: "POST",
+          body: JSON.stringify({ changedBy: state.changedBy || undefined, reason }),
+        });
+        await loadClassificationPreview();
+      } catch (err) {
+        alert(err.message);
+      }
+    })
+  );
+}
+
+function openOverrideClassificationForm(record) {
+  const body = `
+    <h2>人工覆寫分類</h2>
+    <p>${dateOnly(record.date)}｜${record.originalTeacher?.name ?? "（未配對）"}｜${record.periodCode ?? ""}</p>
+    <label>分類結果<select id="f-fundingSource">
+      <option value="GENERAL" ${record.fundingSource === "GENERAL" ? "selected" : ""}>一般公費</option>
+      <option value="OVERTIME" ${record.fundingSource === "OVERTIME" ? "selected" : ""}>超鐘點</option>
+      <option value="PROJECT" ${record.fundingSource === "PROJECT" ? "selected" : ""}>專案</option>
+      <option value="UNDETERMINED" ${record.fundingSource === "UNDETERMINED" ? "selected" : ""}>待確認</option>
+    </select></label>
+    <label id="f-projectWrap" ${record.fundingSource === "PROJECT" ? "" : "hidden"}>專案<select id="f-projectId">${projectOptions(record.projectId)}</select></label>
+    <label>覆寫原因（必填）<input id="f-reason" type="text" /></label>
+    <div class="error-text" id="f-error" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="f-cancel">取消</button>
+      <button type="button" id="f-submit">儲存</button>
+    </div>`;
+  showModal(body);
+  qs("#f-fundingSource").addEventListener("change", (e) => {
+    qs("#f-projectWrap").hidden = e.target.value !== "PROJECT";
+  });
+  qs("#f-cancel").addEventListener("click", closeModal);
+  qs("#f-submit").addEventListener("click", async () => {
+    try {
+      const fundingSource = qs("#f-fundingSource").value;
+      const reason = qs("#f-reason").value.trim();
+      if (!reason) throw new Error("請填寫覆寫原因");
+      await api(`/api/substitute-records/${record.id}/override-classification`, {
+        method: "POST",
+        body: JSON.stringify({
+          fundingSource,
+          projectId: fundingSource === "PROJECT" ? qs("#f-projectId").value : undefined,
+          changedBy: state.changedBy || undefined,
+          reason,
+        }),
+      });
+      closeModal();
+      await loadClassificationPreview();
+    } catch (err) {
+      showFormError(err.message);
+    }
+  });
 }
 
 init();

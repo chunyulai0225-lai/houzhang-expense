@@ -41,6 +41,12 @@ import {
   listWorkbookSheets,
   resolveTeacherReference,
 } from "./services/excelImportService";
+import {
+  classifyMonthlyImport,
+  listClassificationPreview,
+  overrideClassification,
+  revertToAutoClassification,
+} from "./services/classificationService";
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -369,6 +375,48 @@ app.post("/api/substitute-records/:id/resolve-teacher", async (req, res) => {
   try {
     const { field, personId, changedBy } = req.body;
     const record = await resolveTeacherReference(req.params.id, field, personId, changedBy || undefined);
+    res.json(record);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// ---- Phase 8：自動分類（只判斷來源類型，不算金額）----
+
+app.post("/api/monthly-imports/:id/classify", async (req, res) => {
+  try {
+    const summary = await classifyMonthlyImport(req.params.id, req.body?.changedBy || undefined);
+    res.json(summary);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.get("/api/monthly-imports/:id/classification-preview", async (req, res) => {
+  const { fundingSource, classificationMethod, isManuallyModified, staffType } = req.query;
+  const records = await listClassificationPreview(req.params.id, {
+    fundingSource: fundingSource ? (String(fundingSource) as any) : undefined,
+    classificationMethod: classificationMethod ? (String(classificationMethod) as any) : undefined,
+    isManuallyModified: isManuallyModified !== undefined ? isManuallyModified === "true" : undefined,
+    staffType: staffType ? (String(staffType) as any) : undefined,
+  });
+  res.json(records);
+});
+
+app.post("/api/substitute-records/:id/override-classification", async (req, res) => {
+  try {
+    const { fundingSource, projectId, changedBy, reason } = req.body;
+    const record = await overrideClassification(req.params.id, { fundingSource, projectId }, changedBy || undefined, reason);
+    res.json(record);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/substitute-records/:id/revert-classification", async (req, res) => {
+  try {
+    const { changedBy, reason } = req.body;
+    const record = await revertToAutoClassification(req.params.id, changedBy || undefined, reason);
     res.json(record);
   } catch (err) {
     handleError(res, err);
