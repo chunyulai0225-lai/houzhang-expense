@@ -3,6 +3,7 @@
 
 const WEEKDAY_LABEL = { MON: "星期一", TUE: "星期二", WED: "星期三", THU: "星期四", FRI: "星期五" };
 const CLASSIFICATION_LABEL = { GENERAL: "一般公費", OVERTIME: "超鐘點", PROJECT: "專案" };
+const STAFF_TYPE_LABEL = { BD: "編制內(BD)", NON_BD: "編制外(非BD)", UNKNOWN: "未指定" };
 
 const WEEKDAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 const WEEKDAY_LABEL_SHORT = { MON: "一", TUE: "二", WED: "三", THU: "四", FRI: "五", SAT: "六", SUN: "日" };
@@ -90,6 +91,7 @@ async function init() {
     await loadCalendar();
   });
 
+  qs("#btnInspectFile").addEventListener("click", inspectImportFile);
   qs("#btnUploadImport").addEventListener("click", uploadImportFile);
   qs("#btnAutoApplyMatches").addEventListener("click", async () => {
     if (!state.currentImportId) return;
@@ -650,7 +652,10 @@ function setupImportPeriodOptions() {
   };
 }
 
-async function uploadImportFile() {
+// 步驟一：上傳前先讓管理者看到這份 Excel 有哪些工作表，選擇要匯入哪一個。
+// 真實的公費代課 Excel 通常同時包含教師代碼對照表、編制內/外明細、給出納彙總等多個
+// 工作表，不能假設固定是第一個，也不能把「給出納」這種已彙總結果的工作表當原始資料匯入。
+async function inspectImportFile() {
   const fileInput = qs("#importFile");
   if (!fileInput.files || fileInput.files.length === 0) {
     alert("請先選擇 Excel 檔案");
@@ -663,9 +668,47 @@ async function uploadImportFile() {
 
   const formData = new FormData();
   formData.append("file", fileInput.files[0]);
+
+  let sheets;
+  try {
+    const res = await fetch("/api/monthly-imports/inspect", { method: "POST", body: formData });
+    sheets = await res.json();
+    if (!res.ok) throw new Error(sheets.error || "讀取 Excel 失敗");
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+
+  const sheetSelect = qs("#importSheetSelect");
+  sheetSelect.innerHTML = sheets
+    .map((s) => `<option value="${s.name}" data-suggest="${s.suggestedStaffType}">${s.name}（${s.rowCount} 列）</option>`)
+    .join("");
+  qs("#sheetPickerForm").hidden = false;
+
+  const applySuggestion = () => {
+    const selected = sheetSelect.selectedOptions[0];
+    if (selected) qs("#importStaffTypeSelect").value = selected.dataset.suggest || "UNKNOWN";
+  };
+  sheetSelect.onchange = applySuggestion;
+  applySuggestion();
+}
+
+// 步驟二：實際上傳並匯入指定的工作表
+async function uploadImportFile() {
+  const fileInput = qs("#importFile");
+  const sheetName = qs("#importSheetSelect").value;
+  if (!fileInput.files || fileInput.files.length === 0 || !sheetName) {
+    alert("請先完成上一步的工作表選擇");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
   formData.append("semesterId", state.semesterId);
   formData.append("year", String(state.importPeriod.year));
   formData.append("month", String(state.importPeriod.month));
+  formData.append("sheetName", sheetName);
+  formData.append("sourceStaffType", qs("#importStaffTypeSelect").value);
   if (state.changedBy) formData.append("changedBy", state.changedBy);
 
   let result;
@@ -756,8 +799,9 @@ async function loadImportBatches() {
       (b) => `
       <tr class="${b.status === "ACTIVE" ? "status-active" : "status-superseded"}">
         <td>${b.year}年${b.month}月</td>
+        <td>${STAFF_TYPE_LABEL[b.sourceStaffType] || b.sourceStaffType}</td>
         <td>v${b.versionNo}</td>
-        <td>${b.fileName}</td>
+        <td>${b.fileName}${b.sourceSheetName ? `<br><small>${b.sourceSheetName}</small>` : ""}</td>
         <td>${new Date(b.importedAt).toLocaleString("zh-TW")}</td>
         <td>${b.totalCount}</td>
         <td>${b.successCount}</td>

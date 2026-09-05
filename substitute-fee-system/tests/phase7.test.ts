@@ -8,6 +8,7 @@ import {
   importSubstituteExcel,
   listMonthlyImports,
   listUnmatchedTeacherReferences,
+  listWorkbookSheets,
   parseDateText,
   parsePeriodText,
   resolveTeacherReference,
@@ -401,5 +402,180 @@ describe("12. Raw 與標準化資料可追溯回同一 Import Batch", () => {
     expect(record.rawRecord.monthlyImportId).toBe(result.monthlyImport.id);
     expect(record.monthlyImportId).toBe(result.monthlyImport.id);
     expect(record.rawRecordId).toBe(record.rawRecord.id);
+  });
+});
+
+// 以下涵蓋用真實「114學年2026.06月代課(公費).xlsx」驗證時發現、原本測試沒覆蓋到的情況。
+describe("13. 真實檔案驗證後發現並修正的能力", () => {
+  it("listWorkbookSheets 會列出檔案裡所有工作表", async () => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet("教師代碼對照");
+    const detailSheet = workbook.addWorksheet("6月公費 非BD");
+    detailSheet.addRow(STANDARD_HEADERS);
+    detailSheet.addRow(standardRow());
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    const sheets = await listWorkbookSheets(buffer);
+    expect(sheets.map((s) => s.name)).toEqual(["教師代碼對照", "6月公費 非BD"]);
+  });
+
+  it("可以指定要解析哪一個工作表，不會永遠假設是第一個（真實檔案第一個 Sheet 是教師代碼對照表）", async () => {
+    const sem = await makeTestSemester(611);
+    const workbook = new ExcelJS.Workbook();
+    const lookupSheet = workbook.addWorksheet("教師代碼對照");
+    lookupSheet.addRow(["姓名", "員工代號", "部門名稱"]);
+    lookupSheet.addRow(["某某人", "A00001", "A"]);
+    const detailSheet = workbook.addWorksheet("代課明細");
+    detailSheet.addRow(STANDARD_HEADERS);
+    detailSheet.addRow(standardRow());
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    const result = await importSubstituteExcel({
+      semesterId: sem.id,
+      year: 2026,
+      month: 9,
+      fileName: "multi.xlsx",
+      fileBuffer: buffer,
+      sheetName: "代課明細",
+    });
+    expect(result.totalCount).toBe(1);
+    expect(result.successCount).toBe(1);
+  });
+
+  it("表頭以 richText 儲存（例如 Alt+Enter 換行）時仍能正確辨識欄位，不會整欄消失", async () => {
+    const sem = await makeTestSemester(612);
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Sheet1");
+    const headerRow = sheet.addRow([...STANDARD_HEADERS]);
+    // 把「原教師代碼」改成 richText 且中間帶換行，模擬真實檔案的表頭儲存格
+    headerRow.getCell(2).value = { richText: [{ text: "原教師\n" }, { text: "代碼" }] } as unknown as string;
+    sheet.addRow(standardRow());
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    const result = await importSubstituteExcel({
+      semesterId: sem.id,
+      year: 2026,
+      month: 9,
+      fileName: "richtext.xlsx",
+      fileBuffer: buffer,
+    });
+    expect(result.successCount).toBe(1);
+    const raw = await prisma.substituteRecordRaw.findFirstOrThrow({ where: { monthlyImportId: result.monthlyImport.id } });
+    expect(raw.originalTeacherCodeText).toBe("T001");
+  });
+
+  it("表頭前面有標題列（合併儲存格式的月份標題）時，仍能自動找到真正的表頭列", async () => {
+    const sem = await makeTestSemester(613);
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Sheet1");
+    sheet.addRow(["115學年第1學期 2026.09月公費代課 ( 編制外 )"]); // 標題列
+    sheet.addRow([...STANDARD_HEADERS]); // 真正表頭
+    sheet.addRow(standardRow());
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    const result = await importSubstituteExcel({
+      semesterId: sem.id,
+      year: 2026,
+      month: 9,
+      fileName: "titlerow.xlsx",
+      fileBuffer: buffer,
+    });
+    expect(result.totalCount).toBe(1);
+    expect(result.successCount).toBe(1);
+  });
+
+  it("表頭包含逐月變動的金額／天數文字時，仍可用局部比對找到欄位並保留原始文字", async () => {
+    const sem = await makeTestSemester(614);
+    const extendedHeaders = [
+      ...STANDARD_HEADERS.map((h) => (h === "代導師" ? "6月(30天)代導師費$133" : h)),
+      "日薪$1399\n半日薪$700",
+      "代課\n鐘點$405",
+      "節數",
+    ];
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Sheet1");
+    sheet.addRow(extendedHeaders);
+    sheet.addRow([...standardRow(), "700", "405", "3"]);
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    const result = await importSubstituteExcel({
+      semesterId: sem.id,
+      year: 2026,
+      month: 9,
+      fileName: "dynamic-headers.xlsx",
+      fileBuffer: buffer,
+    });
+    expect(result.successCount).toBe(1);
+    const raw = await prisma.substituteRecordRaw.findFirstOrThrow({ where: { monthlyImportId: result.monthlyImport.id } });
+    expect(raw.dailyOrHalfDayWageText).toBe("700");
+    expect(raw.substitutePeriodFeeText).toBe("405");
+    expect(raw.periodCountText).toBe("3");
+  });
+
+  it("日期使用斜線分隔、沒有補零也能解析（真實檔案是 M/D 而非規格書範例的 MM-DD）", () => {
+    const result = parseDateText("6/12(五)", 2026, 6);
+    if ("error" in result) throw new Error("unexpected error");
+    expect(result.date.toISOString().slice(0, 10)).toBe("2026-06-12");
+  });
+
+  it("整月區間或跨日區間不會被誤判成單一日期，一律視為無法解析", () => {
+    expect("error" in parseDateText("6/1~6/30", 2026, 6)).toBe(true);
+    expect("error" in parseDateText("06-26(五) 07:50 ~ 06-29(一) 15:50", 2026, 6)).toBe(true);
+  });
+
+  it("BD／非BD 來源會標示在 SubstituteRecord.staffType，且不影響任何分類或金額欄位", async () => {
+    const sem = await makeTestSemester(615);
+    const buffer = await buildWorkbookBuffer(STANDARD_HEADERS, [standardRow()]);
+    const result = await importSubstituteExcel({
+      semesterId: sem.id,
+      year: 2026,
+      month: 9,
+      fileName: "bd.xlsx",
+      fileBuffer: buffer,
+      sourceStaffType: "BD",
+    });
+    const record = await prisma.substituteRecord.findFirstOrThrow({ where: { monthlyImportId: result.monthlyImport.id } });
+    expect(record.staffType).toBe("BD");
+    expect(record.fundingSource).toBe("UNDETERMINED");
+    expect(record.amount).toBeNull();
+  });
+
+  it("同月份 BD 與非BD 分開匯入互不取代；只有相同來源類型重新匯入才會取代舊批次", async () => {
+    const sem = await makeTestSemester(616);
+    const buffer = await buildWorkbookBuffer(STANDARD_HEADERS, [standardRow()]);
+
+    const bdResult = await importSubstituteExcel({
+      semesterId: sem.id,
+      year: 2026,
+      month: 9,
+      fileName: "bd.xlsx",
+      fileBuffer: buffer,
+      sourceStaffType: "BD",
+    });
+    const nonBdResult = await importSubstituteExcel({
+      semesterId: sem.id,
+      year: 2026,
+      month: 9,
+      fileName: "nonbd.xlsx",
+      fileBuffer: buffer,
+      sourceStaffType: "NON_BD",
+    });
+    expect(nonBdResult.supersededImportIds).toEqual([]);
+
+    const bdBatch = await prisma.monthlyImport.findUniqueOrThrow({ where: { id: bdResult.monthlyImport.id } });
+    expect(bdBatch.status).toBe("ACTIVE");
+
+    const bdResult2 = await importSubstituteExcel({
+      semesterId: sem.id,
+      year: 2026,
+      month: 9,
+      fileName: "bd-v2.xlsx",
+      fileBuffer: buffer,
+      sourceStaffType: "BD",
+    });
+    expect(bdResult2.supersededImportIds).toEqual([bdResult.monthlyImport.id]);
+
+    const nonBdBatchAfter = await prisma.monthlyImport.findUniqueOrThrow({ where: { id: nonBdResult.monthlyImport.id } });
+    expect(nonBdBatchAfter.status).toBe("ACTIVE");
   });
 });

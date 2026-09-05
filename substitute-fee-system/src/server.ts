@@ -38,6 +38,7 @@ import {
   listMonthlyImports,
   listSubstituteRecords,
   listUnmatchedTeacherReferences,
+  listWorkbookSheets,
   resolveTeacherReference,
 } from "./services/excelImportService";
 
@@ -290,16 +291,35 @@ app.patch("/api/calendar/:id", async (req, res) => {
 
 // ---- 公費代課 Excel 匯入 ----
 
+// 真實檔案通常有多個 Sheet（教師代碼對照、編制內/外明細、給出納彙總……），
+// 上傳後先讓管理者看到有哪些 Sheet，選擇要匯入哪一個，而不是直接假設第一個。
+app.post("/api/monthly-imports/inspect", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) throw new Error("請選擇要上傳的 Excel 檔案");
+    const sheets = await listWorkbookSheets(req.file.buffer);
+    // 依 Sheet 名稱粗略猜測 BD／非BD，僅為預先帶入的建議，管理者仍需自行確認/覆蓋
+    const withSuggestion = sheets.map((s) => ({
+      ...s,
+      suggestedStaffType: s.name.includes("非BD") ? "NON_BD" : s.name.includes("BD") ? "BD" : "UNKNOWN",
+    }));
+    res.json(withSuggestion);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
 app.post("/api/monthly-imports", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) throw new Error("請選擇要上傳的 Excel 檔案");
-    const { semesterId, year, month, changedBy } = req.body;
+    const { semesterId, year, month, changedBy, sheetName, sourceStaffType } = req.body;
     const result = await importSubstituteExcel({
       semesterId,
       year: Number(year),
       month: Number(month),
       fileName: req.file.originalname,
       fileBuffer: req.file.buffer,
+      sheetName: sheetName || undefined,
+      sourceStaffType: sourceStaffType || undefined,
       importedBy: changedBy || undefined,
     });
     res.json(result);

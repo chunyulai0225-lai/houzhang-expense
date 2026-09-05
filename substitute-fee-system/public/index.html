@@ -110,7 +110,21 @@
         <label>Excel 檔案
           <input id="importFile" type="file" accept=".xlsx" />
         </label>
-        <button id="btnUploadImport">上傳並匯入</button>
+        <button id="btnInspectFile">下一步：選擇工作表</button>
+      </div>
+
+      <div id="sheetPickerForm" class="import-form" hidden>
+        <label>要匯入的工作表
+          <select id="importSheetSelect"></select>
+        </label>
+        <label>資料來源類型（僅為原始資料來源標記，不影響任何計算）
+          <select id="importStaffTypeSelect">
+            <option value="UNKNOWN">未指定</option>
+            <option value="BD">編制內（BD）</option>
+            <option value="NON_BD">編制外（非BD）</option>
+          </select>
+        </label>
+        <button id="btnUploadImport">確認匯入這個工作表</button>
       </div>
 
       <div id="importResult" class="import-result" hidden>
@@ -133,7 +147,7 @@
 
       <h3>匯入批次紀錄</h3>
       <table id="importBatchTable">
-        <thead><tr><th>年月</th><th>版本</th><th>檔名</th><th>匯入時間</th><th>總筆數</th><th>成功</th><th>錯誤</th><th>狀態</th><th>操作</th></tr></thead>
+        <thead><tr><th>年月</th><th>來源</th><th>版本</th><th>檔名</th><th>匯入時間</th><th>總筆數</th><th>成功</th><th>錯誤</th><th>狀態</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>

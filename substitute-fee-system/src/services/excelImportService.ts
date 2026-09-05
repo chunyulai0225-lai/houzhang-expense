@@ -4,18 +4,29 @@
 // 刻意不做的事：一般公費／超鐘點／專案自動分類、任何費率計算（405元等）、
 // 代導師費／日薪／半日薪、專案扣除計算——這些全部留給 Phase 8。
 // 這裡的 SubstituteRecord 只是「已標準化但尚未分類」的資料
-// （fundingSource=UNDETERMINED、staffType=UNKNOWN、classificationMethod=GENERAL_DEFAULT 皆為預設值）。
+// （fundingSource=UNDETERMINED、classificationMethod=GENERAL_DEFAULT 為預設值；
+// staffType 由匯入時指定的來源 Sheet 直接標示 BD／非BD，這是資料來源事實，不是計算判斷）。
+//
+// 真實檔案驗證後的重要發現（保留在註解中，供之後維護對照）：
+// - 表頭儲存格常見換行（例如「原教師\n代碼」），比對前必須先去除所有空白字元。
+// - 部分表頭本身包含當月／金額等會變動的文字（例如「6月(30天)代導師費$133」、
+//   「日薪$1399\n半日薪$700」），無法用完全比對，改用穩定關鍵字做局部比對。
+// - 日期分隔符號實際上是斜線「6/12」而非規格書範例的「06-18」，且可能沒有補零；
+//   也可能是「6/1~6/30」這種整月區間或「導師時間」這類非單日資料，一律視為無法解析，
+//   不猜測拆分方式。
+// - 「編制內／編制外（BD／非BD）」在真實作業中是以不同 Sheet 分開維護，
+//   不是同一份資料裡的欄位值，因此匯入時由呼叫端明確指定，而不是逐列判斷。
 
 import ExcelJS from "exceljs";
-import type { MonthlyImport, Person, Weekday } from "@prisma/client";
+import type { MonthlyImport, Person, StaffType, Weekday } from "@prisma/client";
 import { prisma } from "../prismaClient";
 
 // ============================================================
-// 一、Excel 解析：欄位別名對照（尚未取得真實 Excel，先依規格書列出的欄位名稱比對，
-//     真實檔案格式若有出入，只需要調整這份對照表，不需要更動匯入流程本身）
+// 一、Excel 解析：欄位比對
 // ============================================================
 
-const COLUMN_ALIASES: Record<string, string[]> = {
+// 完全比對（去除空白後）。同一個欄位可能有多種寫法，依序嘗試。
+const EXACT_COLUMN_ALIASES: Record<string, string[]> = {
   rowNumber: ["序", "序號"],
   originalTeacherCode: ["原教師代碼", "原教師代号"],
   originalTeacherName: ["原教師"],
@@ -30,10 +41,23 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   teacherCert: ["教師證"],
   payGrade: ["薪等"],
   homeroomFeeText: ["代導師"],
+  periodCountText: ["節數"],
+};
+
+// 局部比對（表頭常包含會逐月變動的文字，例如金額、天數），
+// 只在完全比對找不到時才嘗試，且每個欄位只會被比對一次（先到先得）。
+const FUZZY_COLUMN_MARKERS: Record<string, string> = {
+  homeroomFeeText: "代導師費",
+  dailyOrHalfDayWageText: "日薪",
+  substitutePeriodFeeText: "代課鐘點",
 };
 
 // 缺少這些欄位標題時，整份 Excel 直接視為結構異常，不會建立任何批次
 const REQUIRED_FIELDS = ["dateText", "originalTeacherName", "substituteTeacherName", "periodText"] as const;
+
+function normalizeHeader(text: string): string {
+  return text.replace(/\s+/g, "");
+}
 
 export interface ParsedExcelRow {
   rowNumber: number;
@@ -51,6 +75,9 @@ export interface ParsedExcelRow {
   teacherCert?: string;
   payGrade?: string;
   homeroomFeeText?: string;
+  dailyOrHalfDayWageText?: string;
+  substitutePeriodFeeText?: string;
+  periodCountText?: string;
 }
 
 export interface ParsedWorkbook {
@@ -62,7 +89,13 @@ function cellToString(value: ExcelJS.CellValue): string | null {
   if (value === null || value === undefined) return null;
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "object") {
-    const v = value as { text?: unknown; result?: unknown };
+    const v = value as { text?: unknown; result?: unknown; richText?: { text: string }[] };
+    // 真實 Excel 的表頭常見以 richText 儲存（例如 Alt+Enter 換行的表頭），
+    // 不能只處理 text/result，否則這些欄位會直接消失（回傳 null 被過濾掉）。
+    if (Array.isArray(v.richText)) {
+      const joined = v.richText.map((run) => run.text).join("").trim();
+      return joined || null;
+    }
     if ("text" in v && v.text != null) return String(v.text).trim() || null;
     if ("result" in v && v.result != null) return String(v.result).trim() || null;
     return null;
@@ -82,43 +115,84 @@ function isRowEffectivelyEmpty(row: ParsedExcelRow): boolean {
   );
 }
 
-export async function parseWorkbook(buffer: Buffer): Promise<ParsedWorkbook> {
+export interface WorkbookSheetInfo {
+  name: string;
+  rowCount: number;
+}
+
+// 供上傳後先讓管理者確認「這份 Excel 裡有哪些 Sheet」，再選擇要匯入哪一個。
+export async function listWorkbookSheets(buffer: Buffer): Promise<WorkbookSheetInfo[]> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
-  const sheet = workbook.worksheets[0];
+  return workbook.worksheets.map((sheet) => ({ name: sheet.name, rowCount: sheet.rowCount }));
+}
+
+// sheetName 未指定時預設抓第一個工作表（供只有單一 Sheet 的檔案，例如測試用檔案）。
+// 真實的公費代課 Excel 通常有多個 Sheet（教師代碼對照、編制內/外明細、給出納彙總……），
+// 呼叫端必須先用 listWorkbookSheets() 確認要匯入哪一個，不能假設固定是第一個。
+export async function parseWorkbook(buffer: Buffer, sheetName?: string): Promise<ParsedWorkbook> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  const sheet = sheetName ? workbook.getWorksheet(sheetName) : workbook.worksheets[0];
   if (!sheet) {
-    throw new Error("Excel 檔案沒有任何工作表");
+    throw new Error(sheetName ? `找不到名為「${sheetName}」的工作表` : "Excel 檔案沒有任何工作表");
   }
 
-  const headerRow = sheet.getRow(1);
+  // 表頭列位置不固定（真實檔案常見「標題列＋空白列＋表頭列」），
+  // 找出第一個能比對到「日期」「原教師」等關鍵欄位數最多的列，視為表頭列。
+  const headerRowNumber = findHeaderRowNumber(sheet);
+  const headerRow = sheet.getRow(headerRowNumber);
+
   const headers: string[] = [];
   const columnMap: Record<string, number> = {};
+  const claimedFields = new Set<string>();
+
   headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
     const text = cellToString(cell.value);
     if (!text) return;
     headers.push(text);
-    for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
-      if (aliases.includes(text)) {
+    const normalized = normalizeHeader(text);
+
+    for (const [field, aliases] of Object.entries(EXACT_COLUMN_ALIASES)) {
+      if (claimedFields.has(field)) continue;
+      if (aliases.some((alias) => normalizeHeader(alias) === normalized)) {
         columnMap[field] = colNumber;
+        claimedFields.add(field);
+        return;
+      }
+    }
+  });
+
+  // 完全比對結束後，剩下的欄位再嘗試局部比對（處理表頭包含變動文字的情況）
+  headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    const text = cellToString(cell.value);
+    if (!text) return;
+    const normalized = normalizeHeader(text);
+    for (const [field, marker] of Object.entries(FUZZY_COLUMN_MARKERS)) {
+      if (claimedFields.has(field)) continue;
+      if (normalized.includes(marker)) {
+        columnMap[field] = colNumber;
+        claimedFields.add(field);
       }
     }
   });
 
   const missingRequired = REQUIRED_FIELDS.filter((f) => !(f in columnMap));
   if (missingRequired.length > 0) {
-    const labels = missingRequired.map((f) => COLUMN_ALIASES[f][0]).join("、");
+    const labels = missingRequired.map((f) => EXACT_COLUMN_ALIASES[f][0]).join("、");
     throw new Error(`Excel 缺少必要欄位：${labels}（找到的欄位：${headers.join("、") || "無"}）`);
   }
 
   const rows: ParsedExcelRow[] = [];
-  const lastRowNumber = sheet.lastRow?.number ?? 1;
+  const lastRowNumber = sheet.lastRow?.number ?? headerRowNumber;
   const get = (row: ExcelJS.Row, field: string): string | undefined => {
     const col = columnMap[field];
     if (!col) return undefined;
     return cellToString(row.getCell(col).value) ?? undefined;
   };
 
-  for (let r = 2; r <= lastRowNumber; r++) {
+  let dataRowSeq = 0;
+  for (let r = headerRowNumber + 1; r <= lastRowNumber; r++) {
     const row = sheet.getRow(r);
     const raw: Record<string, string | null> = {};
     headerRow.eachCell({ includeEmpty: false }, (headerCell, colNumber) => {
@@ -128,7 +202,7 @@ export async function parseWorkbook(buffer: Buffer): Promise<ParsedWorkbook> {
     });
 
     const parsed: ParsedExcelRow = {
-      rowNumber: r - 1,
+      rowNumber: 0, // 先佔位，跳過空白列後再重新編號
       raw,
       originalTeacherCode: get(row, "originalTeacherCode"),
       originalTeacherName: get(row, "originalTeacherName"),
@@ -143,13 +217,45 @@ export async function parseWorkbook(buffer: Buffer): Promise<ParsedWorkbook> {
       teacherCert: get(row, "teacherCert"),
       payGrade: get(row, "payGrade"),
       homeroomFeeText: get(row, "homeroomFeeText"),
+      dailyOrHalfDayWageText: get(row, "dailyOrHalfDayWageText"),
+      substitutePeriodFeeText: get(row, "substitutePeriodFeeText"),
+      periodCountText: get(row, "periodCountText"),
     };
 
-    if (isRowEffectivelyEmpty(parsed)) continue; // 跳過完全空白的間隔列
+    if (isRowEffectivelyEmpty(parsed)) continue; // 跳過完全空白／備註／簽名列
+    dataRowSeq += 1;
+    parsed.rowNumber = dataRowSeq;
     rows.push(parsed);
   }
 
   return { headers, rows };
+}
+
+// 在前 10 列中找出「看起來最像表頭」的那一列：比對得到的欄位數最多者勝出。
+// 這是為了因應真實檔案常見的「標題列（合併儲存格）＋表頭列」結構，
+// 而不是每次都假設表頭必定在第 1 列。
+function findHeaderRowNumber(sheet: ExcelJS.Worksheet): number {
+  const maxScan = Math.min(10, sheet.rowCount || 1);
+  let bestRow = 1;
+  let bestScore = -1;
+  for (let r = 1; r <= maxScan; r++) {
+    const row = sheet.getRow(r);
+    let score = 0;
+    row.eachCell({ includeEmpty: false }, (cell) => {
+      const text = cellToString(cell.value);
+      if (!text) return;
+      const normalized = normalizeHeader(text);
+      const isExact = Object.values(EXACT_COLUMN_ALIASES).some((aliases) =>
+        aliases.some((alias) => normalizeHeader(alias) === normalized)
+      );
+      if (isExact) score += 1;
+    });
+    if (score > bestScore) {
+      bestScore = score;
+      bestRow = r;
+    }
+  }
+  return bestRow;
 }
 
 // ============================================================
@@ -176,15 +282,23 @@ export interface ParsedDateResult {
 }
 
 // 年份／月份由匯入時管理者選擇的學期＋年月提供（例如「2026年6月」），
-// 不從 Excel 本身推斷，因為原始文字通常只有「MM-DD」，沒有完整年份。
+// 不從 Excel 本身推斷，因為原始文字通常只有「M-D」或「M/D」，沒有完整年份。
+//
+// 整個字串必須完全符合「M-D或M/D + 可選星期 + 可選單一時間範圍」才算合法單日日期；
+// 像「6/1~6/30」這種日期區間、或任何尾端還有其他文字的情況，一律視為無法解析，
+// 不會只取開頭幾個字元就當成單一日期（避免把整月彙總列誤判成某一天的資料）。
+const DATE_PATTERN =
+  /^(\d{1,2})[-/](\d{1,2})(?:\(([一二三四五六日天])\))?(?:\s*\d{1,2}:\d{2}\s*~\s*\d{1,2}:\d{2})?$/;
+
 export function parseDateText(
   text: string,
   year: number,
   expectedMonth: number
 ): ParsedDateResult | { error: string } {
-  const match = text.trim().match(/^(\d{1,2})-(\d{1,2})(?:\(([一二三四五六日天])\))?/);
+  const trimmed = text.trim();
+  const match = trimmed.match(DATE_PATTERN);
   if (!match) {
-    return { error: `無法解析日期格式："${text}"，預期格式如 "06-18(四)"` };
+    return { error: `無法解析日期格式："${text}"，預期格式如 "06-18(四)" 或 "6/18(四) 13:50 ~ 15:50"` };
   }
   const month = Number(match[1]);
   const day = Number(match[2]);
@@ -222,7 +336,8 @@ export function parsePeriodText(text: string, validCodes: Set<string>): { period
     if (num) return check(`P${num}`);
   }
 
-  // 多節／範圍等複合格式（例如「第1,2節」）目前不猜測拆分方式，一律視為無法解析
+  // 多節／星期前綴／導師時間／班級與節次合併等複合格式（例如「第1,2節」「週二第三節」
+  // 「導師時間」）目前不猜測拆分或轉換方式，一律視為無法解析，交由管理者人工確認。
   return { error: `無法解析節次："${text}"` };
 }
 
@@ -230,9 +345,17 @@ export function parsePeriodText(text: string, validCodes: Set<string>): { period
 // 三、匯入批次（含重新匯入策略）
 // ============================================================
 
-async function computeNextVersionNo(semesterId: string, year: number, month: number): Promise<number> {
+// 真實作業把編制內／編制外分開維護在不同 Sheet，同一個月會分開上傳兩次，
+// 所以版本判斷／取代範圍除了 semesterId+year+month，還要看 sourceStaffType，
+// 避免匯入「非BD」把「BD」的批次誤判為舊版本而取代掉。
+async function computeNextVersionNo(
+  semesterId: string,
+  year: number,
+  month: number,
+  sourceStaffType: StaffType
+): Promise<number> {
   const last = await prisma.monthlyImport.findFirst({
-    where: { semesterId, year, month },
+    where: { semesterId, year, month, sourceStaffType },
     orderBy: { versionNo: "desc" },
   });
   return (last?.versionNo ?? 0) + 1;
@@ -260,21 +383,30 @@ export async function importSubstituteExcel(params: {
   month: number;
   fileName: string;
   fileBuffer: Buffer;
+  sheetName?: string; // 未指定時預設第一個工作表（供單一 Sheet 的測試檔案使用）
+  sourceStaffType?: StaffType; // 這批資料來自哪個 Sheet（BD／非BD），僅為來源標記，不影響任何計算
   importedBy?: string;
 }): Promise<ImportSubstituteExcelResult> {
   await prisma.semester.findUniqueOrThrow({ where: { id: params.semesterId } });
 
-  const { headers, rows } = await parseWorkbook(params.fileBuffer);
+  const { headers, rows } = await parseWorkbook(params.fileBuffer, params.sheetName);
 
   const periodSlots = await prisma.periodSlot.findMany({ select: { code: true } });
   const validPeriodCodes = new Set(periodSlots.map((p) => p.code));
+  const sourceStaffType: StaffType = params.sourceStaffType ?? "UNKNOWN";
 
-  // 重新匯入策略：同學期＋同年月的舊「有效」批次全部轉為 SUPERSEDED，不刪除，
-  // 新批次的 versionNo 遞增，成為新的 ACTIVE 批次。
+  // 重新匯入策略：同學期＋同年月＋同來源類型（BD／非BD）的舊「有效」批次全部轉為
+  // SUPERSEDED，不刪除，新批次的 versionNo 遞增，成為新的 ACTIVE 批次。
   const previousActive = await prisma.monthlyImport.findMany({
-    where: { semesterId: params.semesterId, year: params.year, month: params.month, status: "ACTIVE" },
+    where: {
+      semesterId: params.semesterId,
+      year: params.year,
+      month: params.month,
+      sourceStaffType,
+      status: "ACTIVE",
+    },
   });
-  const nextVersionNo = await computeNextVersionNo(params.semesterId, params.year, params.month);
+  const nextVersionNo = await computeNextVersionNo(params.semesterId, params.year, params.month, sourceStaffType);
 
   const monthlyImport = await prisma.monthlyImport.create({
     data: {
@@ -286,6 +418,8 @@ export async function importSubstituteExcel(params: {
       totalCount: rows.length,
       versionNo: nextVersionNo,
       status: "ACTIVE",
+      sourceStaffType,
+      sourceSheetName: params.sheetName,
     },
   });
 
@@ -331,6 +465,10 @@ export async function importSubstituteExcel(params: {
         teacherCertText: row.teacherCert,
         payGradeText: row.payGrade,
         homeroomFeeText: row.homeroomFeeText,
+        dailyOrHalfDayWageText: row.dailyOrHalfDayWageText,
+        substitutePeriodFeeText: row.substitutePeriodFeeText,
+        periodCountText: row.periodCountText,
+        sheetName: params.sheetName,
         rawJson: JSON.stringify(row.raw),
       },
     });
@@ -386,6 +524,7 @@ export async function importSubstituteExcel(params: {
         subject: row.subject,
         leaveType: row.leaveType,
         rawHoursOrDays: row.hoursOrDaysText,
+        staffType: sourceStaffType, // 來自匯入時指定的 Sheet 來源，屬於資料事實，非計算判斷
         note: noteParts.length > 0 ? noteParts.join("；") : undefined,
       },
     });

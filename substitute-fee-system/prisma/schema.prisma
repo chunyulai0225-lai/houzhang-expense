@@ -334,21 +334,27 @@ enum ImportBatchStatus {
 }
 
 model MonthlyImport {
-  id           String            @id @default(cuid())
-  semesterId   String
-  semester     Semester          @relation(fields: [semesterId], references: [id])
-  year         Int // 西元年，例如 2026
-  month        Int // 1-12
-  importedAt   DateTime          @default(now())
-  fileName     String
-  importedBy   String?
-  totalCount   Int               @default(0)
-  successCount Int               @default(0)
-  errorCount   Int               @default(0)
-  versionNo    Int               @default(1) // 同月重複匯入時遞增，不覆蓋舊版本
-  status       ImportBatchStatus @default(ACTIVE)
-  note         String?
-  createdAt    DateTime          @default(now())
+  id              String            @id @default(cuid())
+  semesterId      String
+  semester        Semester          @relation(fields: [semesterId], references: [id])
+  year            Int // 西元年，例如 2026
+  month           Int // 1-12
+  importedAt      DateTime          @default(now())
+  fileName        String
+  importedBy      String?
+  totalCount      Int               @default(0)
+  successCount    Int               @default(0)
+  errorCount      Int               @default(0)
+  versionNo       Int               @default(1) // 同 semesterId+year+month+sourceStaffType 重複匯入時遞增，不覆蓋舊版本
+  status          ImportBatchStatus @default(ACTIVE)
+  // 真實檔案把「編制內／編制外」拆成不同 Sheet 個別維護，同一個月會分開上傳兩批。
+  // 這裡只記錄「這一批資料來自哪個 Sheet」這個事實，不代表任何付款規則。
+  // UNKNOWN 供舊測試資料／不區分 BD 的情境使用。重新匯入時，只有相同
+  // (semesterId, year, month, sourceStaffType) 的舊批次才會被取代。
+  sourceStaffType StaffType         @default(UNKNOWN)
+  sourceSheetName String? // 匯入來源的 Excel 工作表名稱
+  note            String?
+  createdAt       DateTime          @default(now())
 
   rawRecords        SubstituteRecordRaw[]
   substituteRecords SubstituteRecord[]
@@ -388,8 +394,12 @@ model SubstituteRecordRaw {
   substituteTeacherCodeText String? // 代課教師代碼（原始）
   substituteTeacherText     String? // 代課教師
   teacherCertText           String? // 教師證
-  payGradeText              String? // 薪等
-  homeroomFeeText           String? // 代導師
+  payGradeText              String? // 薪等（真實檔案中此欄實際內容不一定是薪等代碼，原樣保留、不解讀）
+  homeroomFeeText           String? // 代導師費欄位原始文字（欄名常包含當月天數與金額，例如「6月(30天)代導師費$133」）
+  dailyOrHalfDayWageText    String? // 日薪／半日薪欄位原始文字（真實檔案中兩者常合併為一欄）
+  substitutePeriodFeeText   String? // 代課鐘點欄位原始文字（例如「405」，或整月加總的公式結果）
+  periodCountText           String? // 節數欄位原始文字，與「時數天數」是不同欄位
+  sheetName                 String? // 來源 Excel 工作表名稱（例如「6月公費 非BD 0701」），供追查
   rawJson                   String? // 保留完整原始列 JSON，防欄位異動遺漏
   createdAt                 DateTime      @default(now())
 
