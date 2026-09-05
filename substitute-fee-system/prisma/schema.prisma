@@ -326,47 +326,72 @@ model SchoolCalendarDay {
 // 十、每月匯入
 // ============================================================
 
+// 重新匯入策略：同一 semesterId+year+month 若重新上傳，舊批次一律轉為 SUPERSEDED，
+// 不刪除、不覆蓋，資料仍可查詢；只有 ACTIVE 批次視為「目前有效」的資料。
+enum ImportBatchStatus {
+  ACTIVE
+  SUPERSEDED
+}
+
 model MonthlyImport {
-  id           String   @id @default(cuid())
+  id           String            @id @default(cuid())
   semesterId   String
-  semester     Semester @relation(fields: [semesterId], references: [id])
+  semester     Semester          @relation(fields: [semesterId], references: [id])
   year         Int // 西元年，例如 2026
   month        Int // 1-12
-  importedAt   DateTime @default(now())
+  importedAt   DateTime          @default(now())
   fileName     String
   importedBy   String?
-  totalCount   Int      @default(0)
-  successCount Int      @default(0)
-  errorCount   Int      @default(0)
-  versionNo    Int      @default(1) // 同月重複匯入時遞增，不覆蓋舊版本
+  totalCount   Int               @default(0)
+  successCount Int               @default(0)
+  errorCount   Int               @default(0)
+  versionNo    Int               @default(1) // 同月重複匯入時遞增，不覆蓋舊版本
+  status       ImportBatchStatus @default(ACTIVE)
   note         String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime          @default(now())
 
   rawRecords        SubstituteRecordRaw[]
   substituteRecords SubstituteRecord[]
+  errors            MonthlyImportError[]
 
   @@index([semesterId, year, month])
 }
 
+// 匯入錯誤／異常列表，讓管理者事後仍可查詢「哪一列、哪個欄位、什麼問題」，
+// 不是只有匯入當下的畫面才看得到。
+model MonthlyImportError {
+  id              String        @id @default(cuid())
+  monthlyImportId String
+  monthlyImport   MonthlyImport @relation(fields: [monthlyImportId], references: [id])
+  rowNumber       Int?
+  fieldName       String?
+  message         String
+  createdAt       DateTime      @default(now())
+
+  @@index([monthlyImportId])
+}
+
 // 原始 Excel 資料，永不覆寫
 model SubstituteRecordRaw {
-  id                    String        @id @default(cuid())
-  monthlyImportId       String
-  monthlyImport         MonthlyImport @relation(fields: [monthlyImportId], references: [id])
-  rowNumber             Int? // 序
-  originalTeacherText   String? // 原教師（原始文字）
-  dateText              String? // 日期原始文字，例如 "06-18(四) 13:50 ~ 15:50"
-  leaveTypeText         String? // 假別
-  hoursOrDaysText       String? // 時數／天數
-  periodText            String? // 節次
-  classText             String? // 班級
-  subjectText           String? // 科目
-  substituteTeacherText String? // 代課教師
-  teacherCertText       String? // 教師證
-  payGradeText          String? // 薪等
-  homeroomFeeText       String? // 代導師
-  rawJson               String? // 保留完整原始列 JSON，防欄位異動遺漏
-  createdAt             DateTime      @default(now())
+  id                        String        @id @default(cuid())
+  monthlyImportId           String
+  monthlyImport             MonthlyImport @relation(fields: [monthlyImportId], references: [id])
+  rowNumber                 Int? // 序
+  originalTeacherCodeText   String? // 原教師代碼（原始）
+  originalTeacherText       String? // 原教師（原始文字）
+  dateText                  String? // 日期原始文字，例如 "06-18(四) 13:50 ~ 15:50"
+  leaveTypeText             String? // 假別
+  hoursOrDaysText           String? // 時數／天數
+  periodText                String? // 節次
+  classText                 String? // 班級
+  subjectText               String? // 科目
+  substituteTeacherCodeText String? // 代課教師代碼（原始）
+  substituteTeacherText     String? // 代課教師
+  teacherCertText           String? // 教師證
+  payGradeText              String? // 薪等
+  homeroomFeeText           String? // 代導師
+  rawJson                   String? // 保留完整原始列 JSON，防欄位異動遺漏
+  createdAt                 DateTime      @default(now())
 
   processedRecord SubstituteRecord?
 

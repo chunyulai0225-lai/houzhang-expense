@@ -49,6 +49,17 @@ tr.inactive-row { color: #999; }
 .calendar-summary td, .calendar-summary th { border: none; padding: 2px 4px; }
 .calendar-summary tr.total-row { font-weight: bold; border-top: 1px solid #ccc; }
 
+.import-form { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 16px; flex-wrap: wrap; }
+.import-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.import-form select, .import-form input { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; }
+.import-result { background: #f7fafc; border: 1px solid #d5e0ea; border-radius: 6px; padding: 14px; margin-bottom: 20px; }
+.import-result h3 { margin-top: 0; }
+#importSummary { font-size: 14px; margin-bottom: 8px; }
+#importDetectedHeaders { font-size: 12px; color: #555; margin-bottom: 10px; }
+.import-error-table td, .import-error-table th { font-size: 12px; }
+tr.status-active td:first-child::before { content: "● "; color: #1e8449; }
+tr.status-superseded { color: #999; }
+
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); align-items: center; justify-content: center; }
 .modal-backdrop:not([hidden]) { display: flex; }
 .modal-box { background: white; padding: 20px; border-radius: 8px; width: 420px; max-height: 90vh; overflow-y: auto; }

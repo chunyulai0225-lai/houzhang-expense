@@ -14,6 +14,7 @@ async function main() {
   await prisma.substituteRecord.deleteMany();
   await prisma.substituteRecordRaw.deleteMany();
   await prisma.monthlyLock.deleteMany();
+  await prisma.monthlyImportError.deleteMany();
   await prisma.monthlyImport.deleteMany();
   await prisma.schoolCalendarDay.deleteMany();
   await prisma.specialDateRule.deleteMany();

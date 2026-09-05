@@ -16,6 +16,8 @@ const state = {
   projects: [],
   calendarYear: null,
   calendarMonth: null,
+  importPeriod: null, // { year, month }
+  currentImportId: null,
 };
 
 function getCurrentSemester() {
@@ -88,6 +90,17 @@ async function init() {
     await loadCalendar();
   });
 
+  qs("#btnUploadImport").addEventListener("click", uploadImportFile);
+  qs("#btnAutoApplyMatches").addEventListener("click", async () => {
+    if (!state.currentImportId) return;
+    const result = await api(`/api/monthly-imports/${state.currentImportId}/auto-apply-matches`, {
+      method: "POST",
+      body: JSON.stringify({ changedBy: state.changedBy || undefined }),
+    });
+    alert(`已套用 ${result.appliedCount} 筆，剩餘待處理 ${result.remainingCount} 筆`);
+    await loadUnmatchedForImport(state.currentImportId);
+  });
+
   const semesters = await api("/api/semesters");
   state.semesters = semesters;
   const select = qs("#semesterSelect");
@@ -125,7 +138,8 @@ async function loadForSemester() {
   projectFilter.innerHTML =
     `<option value="">全部專案</option>` + state.projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
   await setupCalendarMonthOptions();
-  await Promise.all([loadWeeklyRules(), loadProjects(), loadDateRules(), loadCalendar()]);
+  setupImportPeriodOptions();
+  await Promise.all([loadWeeklyRules(), loadProjects(), loadDateRules(), loadCalendar(), loadImportBatches()]);
 }
 
 // ---------- 每週固定規則 ----------
@@ -614,6 +628,163 @@ function openCalendarDayForm(day) {
       showFormError(err.message);
     }
   });
+}
+
+// ---------- 公費代課 Excel 匯入 ----------
+
+function setupImportPeriodOptions() {
+  const semester = getCurrentSemester();
+  if (!semester) return;
+  const months = monthRange(semester.startDate, semester.endDate);
+  const select = qs("#importPeriodSelect");
+  select.innerHTML = months.map((m) => `<option value="${m.year}-${m.month}">${m.year}年${m.month}月</option>`).join("");
+  const hasCurrent = state.importPeriod && months.some((m) => m.year === state.importPeriod.year && m.month === state.importPeriod.month);
+  const chosen = hasCurrent ? state.importPeriod : months[0];
+  if (chosen) {
+    select.value = `${chosen.year}-${chosen.month}`;
+    state.importPeriod = chosen;
+  }
+  select.onchange = () => {
+    const [year, month] = select.value.split("-").map(Number);
+    state.importPeriod = { year, month };
+  };
+}
+
+async function uploadImportFile() {
+  const fileInput = qs("#importFile");
+  if (!fileInput.files || fileInput.files.length === 0) {
+    alert("請先選擇 Excel 檔案");
+    return;
+  }
+  if (!state.importPeriod) {
+    alert("請先選擇匯入年月");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+  formData.append("semesterId", state.semesterId);
+  formData.append("year", String(state.importPeriod.year));
+  formData.append("month", String(state.importPeriod.month));
+  if (state.changedBy) formData.append("changedBy", state.changedBy);
+
+  let result;
+  try {
+    const res = await fetch("/api/monthly-imports", { method: "POST", body: formData });
+    result = await res.json();
+    if (!res.ok) throw new Error(result.error || "匯入失敗");
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+
+  state.currentImportId = result.monthlyImport.id;
+  renderImportResult(result);
+  await loadUnmatchedForImport(result.monthlyImport.id);
+  await loadImportBatches();
+}
+
+function renderImportResult(result) {
+  qs("#importResult").hidden = false;
+  const supersededNote =
+    result.supersededImportIds && result.supersededImportIds.length > 0
+      ? `（已將 ${result.supersededImportIds.length} 個舊批次標記為已取代，資料仍保留）`
+      : "";
+  qs("#importSummary").textContent =
+    `檔案：${result.monthlyImport.fileName}｜總筆數 ${result.totalCount}｜成功 ${result.successCount}｜錯誤 ${result.errorCount}${supersededNote}`;
+  qs("#importDetectedHeaders").textContent = `偵測到的欄位：${(result.detectedHeaders || []).join("、")}`;
+
+  const errorTable = qs("#importErrorTable");
+  const errorRows = result.errors || [];
+  if (errorRows.length > 0) {
+    errorTable.hidden = false;
+    errorTable.querySelector("tbody").innerHTML = errorRows
+      .map((e) => `<tr><td>${e.rowNumber ?? ""}</td><td>${e.fieldName ?? ""}</td><td>${e.message}</td></tr>`)
+      .join("");
+  } else {
+    errorTable.hidden = true;
+  }
+}
+
+async function loadUnmatchedForImport(importId) {
+  const unmatched = await api(`/api/monthly-imports/${importId}/unmatched`);
+  const section = qs("#importUnmatchedSection");
+  if (unmatched.length === 0) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  const tbody = qs("#importUnmatchedTable tbody");
+  tbody.innerHTML = unmatched
+    .map((u, idx) => {
+      const options =
+        `<option value="">請選擇</option>` +
+        u.candidates.map((c) => `<option value="${c.id}">${c.name}</option>`).join("");
+      return `
+        <tr data-record-id="${u.recordId}" data-field="${u.field}">
+          <td>${u.rawName}</td>
+          <td>${u.field === "original" ? "原教師" : "代課教師"}</td>
+          <td><select class="unmatched-select" data-idx="${idx}">${options}</select></td>
+          <td><button data-action="resolve">配對</button></td>
+        </tr>`;
+    })
+    .join("");
+
+  tbody.querySelectorAll("button[data-action='resolve']").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      const tr = e.target.closest("tr");
+      const personId = tr.querySelector(".unmatched-select").value;
+      if (!personId) {
+        alert("請先選擇要配對的人員（若清單是空的，請先到人員管理新增這位教師）");
+        return;
+      }
+      await api(`/api/substitute-records/${tr.dataset.recordId}/resolve-teacher`, {
+        method: "POST",
+        body: JSON.stringify({ field: tr.dataset.field, personId, changedBy: state.changedBy || undefined }),
+      });
+      await loadUnmatchedForImport(importId);
+    })
+  );
+}
+
+async function loadImportBatches() {
+  if (!state.semesterId) return;
+  const batches = await api(`/api/monthly-imports?semesterId=${state.semesterId}`);
+  const tbody = qs("#importBatchTable tbody");
+  tbody.innerHTML = batches
+    .map(
+      (b) => `
+      <tr class="${b.status === "ACTIVE" ? "status-active" : "status-superseded"}">
+        <td>${b.year}年${b.month}月</td>
+        <td>v${b.versionNo}</td>
+        <td>${b.fileName}</td>
+        <td>${new Date(b.importedAt).toLocaleString("zh-TW")}</td>
+        <td>${b.totalCount}</td>
+        <td>${b.successCount}</td>
+        <td>${b.errorCount}</td>
+        <td>${b.status === "ACTIVE" ? "有效" : "已取代"}</td>
+        <td><button data-id="${b.id}" data-action="view">查看</button></td>
+      </tr>`
+    )
+    .join("");
+
+  tbody.querySelectorAll("button[data-action='view']").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const detail = await api(`/api/monthly-imports/${btn.dataset.id}`);
+      state.currentImportId = detail.id;
+      renderImportResult({
+        monthlyImport: detail,
+        totalCount: detail.totalCount,
+        successCount: detail.successCount,
+        errorCount: detail.errorCount,
+        errors: detail.errors,
+        detectedHeaders: [],
+        supersededImportIds: [],
+      });
+      qs("#importDetectedHeaders").textContent = "（歷史批次不重新顯示欄位偵測結果，僅顯示錯誤明細）";
+      await loadUnmatchedForImport(detail.id);
+    })
+  );
 }
 
 init();

@@ -23,6 +23,7 @@
     <button class="tab-btn" data-tab="projects">專案</button>
     <button class="tab-btn" data-tab="dateRules">單日例外</button>
     <button class="tab-btn" data-tab="calendar">學校上課日曆</button>
+    <button class="tab-btn" data-tab="importExcel">公費代課匯入</button>
   </nav>
 
   <main>
@@ -98,6 +99,43 @@
         </table>
         <aside id="calendarSummary" class="calendar-summary"></aside>
       </div>
+    </section>
+
+    <!-- 公費代課 Excel 匯入 -->
+    <section id="tab-importExcel" class="tab-panel">
+      <div class="import-form">
+        <label>匯入年月
+          <select id="importPeriodSelect"></select>
+        </label>
+        <label>Excel 檔案
+          <input id="importFile" type="file" accept=".xlsx" />
+        </label>
+        <button id="btnUploadImport">上傳並匯入</button>
+      </div>
+
+      <div id="importResult" class="import-result" hidden>
+        <h3>匯入結果</h3>
+        <div id="importSummary"></div>
+        <div id="importDetectedHeaders"></div>
+        <table id="importErrorTable" class="import-error-table" hidden>
+          <thead><tr><th>列</th><th>欄位</th><th>問題</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="importUnmatchedSection" hidden>
+          <h4>未匹配教師</h4>
+          <button id="btnAutoApplyMatches">套用系統偵測到的唯一比對建議</button>
+          <table id="importUnmatchedTable">
+            <thead><tr><th>原始姓名</th><th>欄位</th><th>候選人員</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <h3>匯入批次紀錄</h3>
+      <table id="importBatchTable">
+        <thead><tr><th>年月</th><th>版本</th><th>檔名</th><th>匯入時間</th><th>總筆數</th><th>成功</th><th>錯誤</th><th>狀態</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </section>
   </main>
 

@@ -1,10 +1,12 @@
-// Phase 5/6：超鐘點／專案設定與學校上課日曆的基本管理介面（後端 API + 靜態頁面）
+// Phase 5/6/7：超鐘點／專案設定、學校上課日曆、公費代課 Excel 匯入的基本管理介面
+// （後端 API + 靜態頁面）
 //
 // 這是目前系統唯一的「使用者介面」，刻意保持簡單：一個 Express server
-// 把 Phase 1-6 已經寫好的 service 包成 JSON API，前端是不需要建置流程的
+// 把 Phase 1-7 已經寫好的 service 包成 JSON API，前端是不需要建置流程的
 // 純 HTML/JS（public/ 目錄）。行政人員好操作優先，不追求美觀。
 
 import express from "express";
+import multer from "multer";
 import path from "path";
 import { prisma } from "./prismaClient";
 import { createProject, listProjects, setProjectActive, updateProject } from "./services/projectService";
@@ -29,8 +31,18 @@ import {
   listCalendarDays,
   updateCalendarDay,
 } from "./services/schoolCalendarService";
+import {
+  autoApplyUnambiguousTeacherMatches,
+  getMonthlyImportDetail,
+  importSubstituteExcel,
+  listMonthlyImports,
+  listSubstituteRecords,
+  listUnmatchedTeacherReferences,
+  resolveTeacherReference,
+} from "./services/excelImportService";
 
 const app = express();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 
@@ -271,6 +283,73 @@ app.patch("/api/calendar/:id", async (req, res) => {
     if ("note" in req.body) changes.note = note === "" ? null : note;
     const day = await updateCalendarDay(req.params.id, changes, changedBy, reason);
     res.json(day);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// ---- 公費代課 Excel 匯入 ----
+
+app.post("/api/monthly-imports", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) throw new Error("請選擇要上傳的 Excel 檔案");
+    const { semesterId, year, month, changedBy } = req.body;
+    const result = await importSubstituteExcel({
+      semesterId,
+      year: Number(year),
+      month: Number(month),
+      fileName: req.file.originalname,
+      fileBuffer: req.file.buffer,
+      importedBy: changedBy || undefined,
+    });
+    res.json(result);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.get("/api/monthly-imports", async (req, res) => {
+  const semesterId = String(req.query.semesterId ?? "");
+  if (!semesterId) return res.status(400).json({ error: "缺少 semesterId" });
+  const year = req.query.year ? Number(req.query.year) : undefined;
+  const month = req.query.month ? Number(req.query.month) : undefined;
+  const batches = await listMonthlyImports(semesterId, { year, month });
+  res.json(batches);
+});
+
+app.get("/api/monthly-imports/:id", async (req, res) => {
+  try {
+    const detail = await getMonthlyImportDetail(req.params.id);
+    res.json(detail);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.get("/api/monthly-imports/:id/records", async (req, res) => {
+  const records = await listSubstituteRecords(req.params.id);
+  res.json(records);
+});
+
+app.get("/api/monthly-imports/:id/unmatched", async (req, res) => {
+  const unmatched = await listUnmatchedTeacherReferences(req.params.id);
+  res.json(unmatched);
+});
+
+app.post("/api/monthly-imports/:id/auto-apply-matches", async (req, res) => {
+  try {
+    const result = await autoApplyUnambiguousTeacherMatches(req.params.id, req.body?.changedBy || undefined);
+    res.json(result);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/substitute-records/:id/resolve-teacher", async (req, res) => {
+  try {
+    const { field, personId, changedBy } = req.body;
+    const record = await resolveTeacherReference(req.params.id, field, personId, changedBy || undefined);
+    res.json(record);
   } catch (err) {
     handleError(res, err);
   }
