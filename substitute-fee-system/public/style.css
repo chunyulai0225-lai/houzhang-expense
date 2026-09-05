@@ -34,6 +34,21 @@ tr.inactive-row { color: #999; }
 
 .conflict-banner { background: #fdecea; border: 1px solid #e0736a; color: #8a2b21; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; }
 
+.calendar-layout { display: flex; gap: 20px; align-items: flex-start; }
+.calendar-table { flex: 1; table-layout: fixed; }
+.calendar-table th { text-align: center; }
+.calendar-table td { height: 64px; vertical-align: top; padding: 4px; cursor: pointer; }
+.calendar-table td.empty { cursor: default; background: #fafafa; }
+.calendar-table td .day-num { font-size: 12px; color: #666; }
+.calendar-table td .day-status { font-size: 16px; text-align: center; margin-top: 6px; }
+.calendar-table td .day-note { font-size: 11px; color: #a83232; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.calendar-table td:hover { background: #eef4fa; }
+.calendar-summary { width: 220px; background: #f0f3f6; border-radius: 6px; padding: 14px; font-size: 13px; }
+.calendar-summary h3 { margin-top: 0; font-size: 14px; }
+.calendar-summary table { width: 100%; }
+.calendar-summary td, .calendar-summary th { border: none; padding: 2px 4px; }
+.calendar-summary tr.total-row { font-weight: bold; border-top: 1px solid #ccc; }
+
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); align-items: center; justify-content: center; }
 .modal-backdrop:not([hidden]) { display: flex; }
 .modal-box { background: white; padding: 20px; border-radius: 8px; width: 420px; max-height: 90vh; overflow-y: auto; }

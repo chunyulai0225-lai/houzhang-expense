@@ -4,13 +4,23 @@
 const WEEKDAY_LABEL = { MON: "星期一", TUE: "星期二", WED: "星期三", THU: "星期四", FRI: "星期五" };
 const CLASSIFICATION_LABEL = { GENERAL: "一般公費", OVERTIME: "超鐘點", PROJECT: "專案" };
 
+const WEEKDAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+const WEEKDAY_LABEL_SHORT = { MON: "一", TUE: "二", WED: "三", THU: "四", FRI: "五", SAT: "六", SUN: "日" };
+
 const state = {
   semesterId: null,
+  semesters: [],
   changedBy: localStorage.getItem("changedBy") || "",
   ruleType: "OVERTIME",
   periodSlots: [],
   projects: [],
+  calendarYear: null,
+  calendarMonth: null,
 };
+
+function getCurrentSemester() {
+  return state.semesters.find((s) => s.id === state.semesterId) || null;
+}
 
 async function api(path, options) {
   const res = await fetch(path, {
@@ -62,7 +72,24 @@ async function init() {
   qs("#filterIncludeCancelled").addEventListener("change", loadDateRules);
   qs("#btnNewDateRule").addEventListener("click", () => openDateRuleForm());
 
+  qs("#calendarMonthSelect").addEventListener("change", (e) => {
+    const [year, month] = e.target.value.split("-").map(Number);
+    state.calendarYear = year;
+    state.calendarMonth = month;
+    loadCalendar();
+  });
+  qs("#btnGenerateCalendar").addEventListener("click", async () => {
+    const result = await api("/api/calendar/generate", {
+      method: "POST",
+      body: JSON.stringify({ semesterId: state.semesterId, changedBy: state.changedBy || undefined }),
+    });
+    alert(`已產生 ${result.createdCount} 天（略過已存在 ${result.skippedCount} 天）`);
+    await setupCalendarMonthOptions();
+    await loadCalendar();
+  });
+
   const semesters = await api("/api/semesters");
+  state.semesters = semesters;
   const select = qs("#semesterSelect");
   select.innerHTML = semesters
     .map((s) => `<option value="${s.id}">${s.schoolYear}學年度第${s.term}學期${s.isCurrent ? "（使用中）" : ""}</option>`)
@@ -97,7 +124,8 @@ async function loadForSemester() {
   const projectFilter = qs("#filterProject");
   projectFilter.innerHTML =
     `<option value="">全部專案</option>` + state.projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
-  await Promise.all([loadWeeklyRules(), loadProjects(), loadDateRules()]);
+  await setupCalendarMonthOptions();
+  await Promise.all([loadWeeklyRules(), loadProjects(), loadDateRules(), loadCalendar()]);
 }
 
 // ---------- 每週固定規則 ----------
@@ -458,6 +486,134 @@ function showFormError(message) {
   } else {
     alert(message);
   }
+}
+
+// ---------- 學校上課日曆 ----------
+
+function monthRange(startIso, endIso) {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  const months = [];
+  let y = start.getUTCFullYear();
+  let m = start.getUTCMonth(); // 0-based
+  const endY = end.getUTCFullYear();
+  const endM = end.getUTCMonth();
+  while (y < endY || (y === endY && m <= endM)) {
+    months.push({ year: y, month: m + 1 });
+    m += 1;
+    if (m > 11) {
+      m = 0;
+      y += 1;
+    }
+  }
+  return months;
+}
+
+async function setupCalendarMonthOptions() {
+  const semester = getCurrentSemester();
+  if (!semester) return;
+  const months = monthRange(semester.startDate, semester.endDate);
+  const select = qs("#calendarMonthSelect");
+  select.innerHTML = months.map((m) => `<option value="${m.year}-${m.month}">${m.year}年${m.month}月</option>`).join("");
+
+  const hasCurrent =
+    state.calendarYear && months.some((m) => m.year === state.calendarYear && m.month === state.calendarMonth);
+  const chosen = hasCurrent ? { year: state.calendarYear, month: state.calendarMonth } : months[0];
+  if (chosen) {
+    select.value = `${chosen.year}-${chosen.month}`;
+    state.calendarYear = chosen.year;
+    state.calendarMonth = chosen.month;
+  }
+}
+
+function buildCalendarGrid(days) {
+  if (days.length === 0) return [];
+  const firstIndex = WEEKDAY_ORDER.indexOf(days[0].weekday);
+  const cells = new Array(firstIndex).fill(null);
+  for (const d of days) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+async function loadCalendar() {
+  if (!state.semesterId || !state.calendarYear || !state.calendarMonth) return;
+  const params = `semesterId=${state.semesterId}&year=${state.calendarYear}&month=${state.calendarMonth}`;
+  const [days, summary] = await Promise.all([
+    api(`/api/calendar?${params}`),
+    api(`/api/calendar/summary?${params}`),
+  ]);
+
+  const cells = buildCalendarGrid(days);
+  const tbody = qs("#calendarTable tbody");
+  const rows = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    const rowCells = cells
+      .slice(i, i + 7)
+      .map((day) => {
+        if (!day) return `<td class="empty"></td>`;
+        const dayNum = Number(day.date.slice(8, 10));
+        return `
+          <td data-id="${day.id}">
+            <div class="day-num">${dayNum}</div>
+            <div class="day-status">${day.isTeachingDay ? "🟢" : "⚪"}</div>
+            ${day.note ? `<div class="day-note" title="${day.note}">${day.note}</div>` : ""}
+          </td>`;
+      })
+      .join("");
+    rows.push(`<tr>${rowCells}</tr>`);
+  }
+  tbody.innerHTML = rows.join("");
+
+  tbody.querySelectorAll("td[data-id]").forEach((td) =>
+    td.addEventListener("click", () => {
+      const day = days.find((d) => d.id === td.dataset.id);
+      openCalendarDayForm(day);
+    })
+  );
+
+  const summaryEl = qs("#calendarSummary");
+  const rowsHtml = summary.byWeekday
+    .filter((w) => w.weekday !== "SAT" && w.weekday !== "SUN")
+    .map((w) => `<tr><td>星期${WEEKDAY_LABEL_SHORT[w.weekday]}</td><td>${w.teachingDayCount}</td></tr>`)
+    .join("");
+  const weekendRows = summary.byWeekday
+    .filter((w) => w.weekday === "SAT" || w.weekday === "SUN")
+    .map((w) => `<tr><td>星期${WEEKDAY_LABEL_SHORT[w.weekday]}</td><td>${w.teachingDayCount}</td></tr>`)
+    .join("");
+  summaryEl.innerHTML = `
+    <h3>${state.calendarYear}年${state.calendarMonth}月上課日統計</h3>
+    <table>${rowsHtml}${weekendRows}<tr class="total-row"><td>總上課日</td><td>${summary.totalTeachingDays}</td></tr></table>`;
+}
+
+function openCalendarDayForm(day) {
+  const body = `
+    <h2>${day.date.slice(0, 10)}（星期${WEEKDAY_LABEL_SHORT[day.weekday]}）</h2>
+    <label><input id="f-isTeachingDay" type="checkbox" ${day.isTeachingDay ? "checked" : ""} /> 是上課日</label>
+    <label>備註<textarea id="f-note">${day.note ?? ""}</textarea></label>
+    <div class="error-text" id="f-error" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="f-cancel">取消</button>
+      <button type="button" id="f-submit">儲存</button>
+    </div>`;
+  showModal(body);
+  qs("#f-cancel").addEventListener("click", closeModal);
+  qs("#f-submit").addEventListener("click", async () => {
+    try {
+      await api(`/api/calendar/${day.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          isTeachingDay: qs("#f-isTeachingDay").checked,
+          note: qs("#f-note").value.trim(),
+          changedBy: state.changedBy || undefined,
+          reason: "透過管理介面修改上課日狀態",
+        }),
+      });
+      closeModal();
+      await loadCalendar();
+    } catch (err) {
+      showFormError(err.message);
+    }
+  });
 }
 
 init();

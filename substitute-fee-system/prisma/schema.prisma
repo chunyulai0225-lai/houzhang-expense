@@ -240,6 +240,8 @@ enum Weekday {
   WED
   THU
   FRI
+  SAT // 目前只有 SchoolCalendarDay 會用到六、日；每週固定規則／代課紀錄一般不會用到
+  SUN
 }
 
 model SpecialWeeklyRule {
@@ -305,16 +307,18 @@ model SpecialDateRule {
 // ============================================================
 
 model SchoolCalendarDay {
-  id            String    @id @default(cuid())
-  semesterId    String?
-  semester      Semester? @relation(fields: [semesterId], references: [id])
-  date          DateTime  @unique
+  id            String   @id @default(cuid())
+  semesterId    String
+  semester      Semester @relation(fields: [semesterId], references: [id])
+  date          DateTime
   weekday       Weekday
   isTeachingDay Boolean // 是否為上課日（人工可調整，用以排除國定假日／停課日／寒暑假等）
   note          String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
+  // 同一學期同一天只能有一筆；原本只在 date 上做全域唯一，範圍錯了（Phase 6 修正）
+  @@unique([semesterId, date])
   @@index([semesterId])
 }
 

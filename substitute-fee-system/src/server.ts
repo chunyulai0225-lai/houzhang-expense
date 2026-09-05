@@ -1,7 +1,7 @@
-// Phase 5：超鐘點／專案設定的基本管理介面（後端 API + 靜態頁面）
+// Phase 5/6：超鐘點／專案設定與學校上課日曆的基本管理介面（後端 API + 靜態頁面）
 //
 // 這是目前系統唯一的「使用者介面」，刻意保持簡單：一個 Express server
-// 把 Phase 1-5 已經寫好的 service 包成 JSON API，前端是不需要建置流程的
+// 把 Phase 1-6 已經寫好的 service 包成 JSON API，前端是不需要建置流程的
 // 純 HTML/JS（public/ 目錄）。行政人員好操作優先，不追求美觀。
 
 import express from "express";
@@ -21,6 +21,14 @@ import {
   listWeeklyRules,
   updateSpecialWeeklyRule,
 } from "./services/specialWeeklyRuleService";
+import {
+  addCalendarDay,
+  generateSemesterCalendar,
+  getMonthlySummary,
+  getSemesterSummary,
+  listCalendarDays,
+  updateCalendarDay,
+} from "./services/schoolCalendarService";
 
 const app = express();
 app.use(express.json());
@@ -215,7 +223,60 @@ app.post("/api/date-rules/:id/cancel", async (req, res) => {
   }
 });
 
+// ---- 學校上課日曆 ----
+
+app.get("/api/calendar", async (req, res) => {
+  const semesterId = String(req.query.semesterId ?? "");
+  if (!semesterId) return res.status(400).json({ error: "缺少 semesterId" });
+  const year = req.query.year ? Number(req.query.year) : undefined;
+  const month = req.query.month ? Number(req.query.month) : undefined;
+  const days = await listCalendarDays(semesterId, { year, month });
+  res.json(days);
+});
+
+app.get("/api/calendar/summary", async (req, res) => {
+  const semesterId = String(req.query.semesterId ?? "");
+  if (!semesterId) return res.status(400).json({ error: "缺少 semesterId" });
+  const year = req.query.year ? Number(req.query.year) : undefined;
+  const month = req.query.month ? Number(req.query.month) : undefined;
+  const summary = year && month ? await getMonthlySummary(semesterId, year, month) : await getSemesterSummary(semesterId);
+  res.json(summary);
+});
+
+app.post("/api/calendar/generate", async (req, res) => {
+  try {
+    const { semesterId, changedBy } = req.body;
+    const result = await generateSemesterCalendar(semesterId, changedBy);
+    res.json(result);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/calendar", async (req, res) => {
+  try {
+    const { semesterId, date, isTeachingDay, note, changedBy } = req.body;
+    const day = await addCalendarDay({ semesterId, date: asDate(date)!, isTeachingDay, note }, changedBy);
+    res.json(day);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.patch("/api/calendar/:id", async (req, res) => {
+  try {
+    const { isTeachingDay, note, changedBy, reason } = req.body;
+    const changes: Record<string, unknown> = {};
+    if ("isTeachingDay" in req.body) changes.isTeachingDay = Boolean(isTeachingDay);
+    if ("note" in req.body) changes.note = note === "" ? null : note;
+    const day = await updateCalendarDay(req.params.id, changes, changedBy, reason);
+    res.json(day);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
 const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () => {
-  console.log(`Phase 5 管理介面已啟動：http://localhost:${port}`);
+  console.log(`管理介面已啟動：http://localhost:${port}`);
 });
