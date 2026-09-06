@@ -185,7 +185,7 @@ async function init() {
     state.calendarMonth = month;
     loadCalendar();
   });
-  qs("#btnGenerateCalendar").addEventListener("click", async () => {
+  qs("#btnGenerateCalendar").addEventListener("click", (e) => withBusyButton(e.target, "產生中…", async () => {
     if (!state.semesterId) {
       alert("請先在畫面上方選擇學期");
       return;
@@ -204,7 +204,7 @@ async function init() {
     }
     await setupCalendarMonthOptions();
     await loadCalendar();
-  });
+  }));
 
   qs("#btnInspectFile").addEventListener("click", inspectImportFile);
   qs("#btnUploadImport").addEventListener("click", uploadImportFile);
@@ -332,13 +332,18 @@ const TAB_LOADERS = {
 
 async function loadForSemester() {
   if (!state.semesterId) return;
+  // 專案清單只在這裡抓一次：同時拿來填「篩選專案」下拉選單跟畫下面的專案表格，
+  // 不要像原本那樣抓兩次（一次填下拉選單、Promise.all 裡的 loadProjects() 又整個
+  // 重新抓一次一模一樣的資料）。這裡故意留在 Promise.all 之外、同步先跑完，
+  // 是因為 loadWeeklyRules() 馬上就要讀 #filterProject 目前的選項。
   state.projects = await gasApi("listProjects", { semesterId: state.semesterId });
   const projectFilter = qs("#filterProject");
   projectFilter.innerHTML =
     `<option value="">全部專案</option>` + state.projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
+  renderProjectsTable(state.projects);
   await setupCalendarMonthOptions();
   setupImportPeriodOptions();
-  await Promise.all([loadWeeklyRules(), loadProjects(), loadDateRules(), loadCalendar(), loadImportBatches()]);
+  await Promise.all([loadWeeklyRules(), loadDateRules(), loadCalendar(), loadImportBatches()]);
   await setupClassificationBatchOptions();
   await loadFeeRules();
   setupFeeCalcPeriodOptions();
@@ -386,21 +391,25 @@ function renderSemesterTable(semesters) {
     })
   );
   tbody.querySelectorAll("button[data-action='setCurrent']").forEach((btn) =>
-    btn.addEventListener("click", async (e) => {
+    btn.addEventListener("click", (e) => {
       const id = e.target.closest("tr").dataset.id;
       const s = semesters.find((s) => s.id === id);
       if (!confirm(`確定要把「${s.schoolYear}學年度第${s.term}學期」設為目前使用中的學期嗎？其他學期會自動取消目前使用中狀態。`)) return;
-      try {
-        await gasApi("setCurrentSemester", { id, changedBy: state.changedBy || undefined });
-        await refreshSemesterList();
-        await loadForSemester();
-      } catch (err) {
-        alert(err.message);
-      }
+      return withBusyButton(e.target, "設定中…", async () => {
+        try {
+          await gasApi("setCurrentSemester", { id, changedBy: state.changedBy || undefined });
+          // 設為目前使用會改變「現在該看哪個學期的資料」，這裡才需要整套重新載入
+          // （跟單純編輯備註／新增其他學期不同，那兩種不會影響目前正在看的學期）。
+          await refreshSemesterList();
+          await loadForSemester();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
     })
   );
   tbody.querySelectorAll("button[data-action='deactivate']").forEach((btn) =>
-    btn.addEventListener("click", async (e) => {
+    btn.addEventListener("click", (e) => {
       const id = e.target.closest("tr").dataset.id;
       const s = semesters.find((s) => s.id === id);
       const confirmMsg = s.isCurrent
@@ -408,25 +417,31 @@ function renderSemesterTable(semesters) {
         : `確定要停用「${s.schoolYear}學年度第${s.term}學期」嗎？停用後不會刪除資料，仍可查詢歷史紀錄。`;
       if (!confirm(confirmMsg)) return;
       const reason = prompt("停用原因（選填）：") || undefined;
-      try {
-        await gasApi("deactivateSemester", { id, changedBy: state.changedBy || undefined, reason });
-        await refreshSemesterList();
-        await loadForSemester();
-      } catch (err) {
-        alert(err.message);
-      }
+      return withBusyButton(e.target, "停用中…", async () => {
+        try {
+          await gasApi("deactivateSemester", { id, changedBy: state.changedBy || undefined, reason });
+          // 停用可能會動到目前正在看的學期（例如停用的正好是目前使用中的學期），
+          // 所以一樣整套重新載入，讓畫面切到重新選出來的學期。
+          await refreshSemesterList();
+          await loadForSemester();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
     })
   );
   tbody.querySelectorAll("button[data-action='activate']").forEach((btn) =>
-    btn.addEventListener("click", async (e) => {
+    btn.addEventListener("click", (e) => withBusyButton(e.target, "啟用中…", async () => {
       const id = e.target.closest("tr").dataset.id;
       try {
+        // 重新啟用只是把 INACTIVE 解除，不會自動變成目前使用中，不影響目前正在看
+        // 哪個學期的資料，不需要整套 loadForSemester()。
         await gasApi("activateSemester", { id, changedBy: state.changedBy || undefined });
         await refreshSemesterList();
       } catch (err) {
         alert(err.message);
       }
-    })
+    }))
   );
 }
 
@@ -452,7 +467,7 @@ function openSemesterForm(existing) {
     </div>`;
   showModal(body);
   qs("#f-cancel").addEventListener("click", closeModal);
-  qs("#f-submit").addEventListener("click", async () => {
+  qs("#f-submit").addEventListener("click", (e) => withBusyButton(e.target, "儲存中…", async () => {
     try {
       const schoolYear = qs("#f-schoolYear").value;
       const startDate = qs("#f-startDate").value;
@@ -478,11 +493,17 @@ function openSemesterForm(existing) {
       }
       closeModal();
       await refreshSemesterList();
-      await loadForSemester();
+      // 新增學期，或編輯「目前沒有在看」的另一個學期，都不會影響目前畫面上顯示的
+      // 資料，不需要整套 loadForSemester()；只有編輯的剛好是目前選取中的學期時，
+      // 開始/結束日期可能改變，匯入年月／日曆月份／費用計算年月的下拉選單才需要
+      // 跟著重新產生。
+      if (existing && existing.id === state.semesterId) {
+        await loadForSemester();
+      }
     } catch (err) {
       showFormError(err.message);
     }
-  });
+  }));
 }
 
 // ---------- 每週固定規則 ----------
@@ -666,9 +687,22 @@ function openDeactivateWeeklyRuleForm(ruleId) {
 
 // ---------- 專案 ----------
 
-async function loadProjects() {
+// 只重新抓「專案」本身（清單＋篩選下拉選單），不觸發整個 loadForSemester() 的
+// 連鎖重新載入——週規則／日期例外／日曆／匯入批次／費率／月結首頁都跟「這個專案
+// 有沒有被新增/改名/停用/刪除」無關，沒必要每次專案異動都整套重讀一次，這是
+// 「刪除專案」明顯變慢的主因之一。
+async function refreshProjectsOnly() {
   if (!state.semesterId) return;
-  const projects = await gasApi("listProjects", { semesterId: state.semesterId });
+  state.projects = await gasApi("listProjects", { semesterId: state.semesterId });
+  const projectFilter = qs("#filterProject");
+  const previousValue = projectFilter.value;
+  projectFilter.innerHTML =
+    `<option value="">全部專案</option>` + state.projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
+  if (state.projects.some((p) => p.id === previousValue)) projectFilter.value = previousValue;
+  renderProjectsTable(state.projects);
+}
+
+function renderProjectsTable(projects) {
   const tbody = qs("#projectTable tbody");
   tbody.innerHTML = projects
     .map(
@@ -693,12 +727,14 @@ async function loadProjects() {
     })
   );
   tbody.querySelectorAll("button[data-action='toggle']").forEach((btn) =>
-    btn.addEventListener("click", async (e) => {
-      const id = e.target.closest("tr").dataset.id;
-      const proj = projects.find((p) => p.id === id);
-      await gasApi("setProjectActive", { id, isActive: !proj.isActive, changedBy: state.changedBy || undefined });
-      await loadForSemester();
-    })
+    btn.addEventListener("click", (e) =>
+      withBusyButton(btn, btn.textContent === "停用" ? "停用中…" : "啟用中…", async () => {
+        const id = e.target.closest("tr").dataset.id;
+        const proj = projects.find((p) => p.id === id);
+        await gasApi("setProjectActive", { id, isActive: !proj.isActive, changedBy: state.changedBy || undefined });
+        await refreshProjectsOnly();
+      })
+    )
   );
   // 只有目前完全沒被 WeeklyRules／DateRules／SubstituteRecords 引用的專案才會顯示這顆
   // 按鈕（見 gasApi listProjects 回傳的 isInUse），但後端仍然會在真正刪除前再檢查一次
@@ -708,13 +744,15 @@ async function loadProjects() {
       const id = e.target.closest("tr").dataset.id;
       const proj = projects.find((p) => p.id === id);
       if (!confirm(`確定要刪除此專案嗎？刪除後無法復原。\n\n專案名稱：${proj.name}`)) return;
-      try {
-        await gasApi("deleteProject", { id, changedBy: state.changedBy || undefined });
-        await loadForSemester();
-      } catch (err) {
-        alert(err.message);
-        await loadForSemester();
-      }
+      await withBusyButton(btn, "刪除中…", async () => {
+        try {
+          await gasApi("deleteProject", { id, changedBy: state.changedBy || undefined });
+          await refreshProjectsOnly();
+        } catch (err) {
+          alert(err.message);
+          await refreshProjectsOnly();
+        }
+      });
     })
   );
 }
@@ -731,7 +769,7 @@ function openProjectForm(existing) {
     </div>`;
   showModal(body);
   qs("#f-cancel").addEventListener("click", closeModal);
-  qs("#f-submit").addEventListener("click", async () => {
+  qs("#f-submit").addEventListener("click", (e) => withBusyButton(e.target, "儲存中…", async () => {
     try {
       const name = qs("#f-name").value.trim();
       if (!name) throw new Error("請輸入專案名稱");
@@ -742,11 +780,11 @@ function openProjectForm(existing) {
         await gasApi("createProject", { semesterId: state.semesterId, name, note, changedBy: state.changedBy || undefined });
       }
       closeModal();
-      await loadForSemester();
+      await refreshProjectsOnly();
     } catch (err) {
       showFormError(err.message);
     }
-  });
+  }));
 }
 
 // ---------- 單日例外 ----------
@@ -848,6 +886,22 @@ function showFormError(message) {
     el.hidden = false;
   } else {
     alert(message);
+  }
+}
+
+// 按下按鈕之後，Google Apps Script 需要一點時間才會回應（連到 Google Sheets 有
+// 真實的網路延遲），這裡讓按鈕立刻顯示「處理中」文字並暫時 disabled，避免使用者
+// 以為畫面卡住而重複按好幾次。不管成功或失敗都會恢復按鈕原本的文字跟可點擊狀態。
+async function withBusyButton(btn, busyText, fn) {
+  if (!btn) return fn();
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = busyText;
+  try {
+    return await fn();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
   }
 }
 

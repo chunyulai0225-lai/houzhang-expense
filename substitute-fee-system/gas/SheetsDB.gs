@@ -6,19 +6,37 @@
  *
  * 所有資料列都當作「物件的陣列」處理：readRows() 回傳 [{col1:val1,...}, ...]，
  * appendRow()/updateRow() 收物件、依表頭順序寫回對應欄位。
+ *
+ * 效能筆記（不影響任何回傳資料或商業邏輯，純粹是同一次執行內的快取）：
+ * getSheet()／getHeaders() 原本每次呼叫都會重新 getSheetByName()／重新讀一次
+ * 表頭範圍，而 appendRow/updateRow/deleteRow/appendRows 每一個都會各自呼叫
+ * getSheet() 跟 getHeaders()，等於同一個 action 裡光是「更新一筆資料」就會重複
+ * 呼叫好幾次 getSheetByName() 跟表頭 getRange().getValues()。這裡加上兩層
+ * 「只在這次 doGet/doPost 執行期間有效」的記憶體快取：_sheetCache（分頁物件）、
+ * _headerCache（表頭陣列）。Apps Script 每次 doGet/doPost 呼叫都是全新的全域
+ * 執行環境（全域變數不會跨請求殘留），所以這個快取天生就是「每次請求重新開始」，
+ * 不會有拿到舊資料的風險；表頭本身在單次執行期間本來就不會變（新增/修改列
+ * 不會動到第 1 列的欄位名稱），快取表頭同樣不影響任何正確性。
  */
 
+var _sheetCache = {};
+var _headerCache = {};
+
 function getSheet(name) {
+  if (_sheetCache[name]) return _sheetCache[name];
   var sheet = getSpreadsheet().getSheetByName(name);
   if (!sheet) throw new Error("找不到分頁「" + name + "」，請先執行 setupSheets()");
+  _sheetCache[name] = sheet;
   return sheet;
 }
 
 function getHeaders(name) {
+  if (_headerCache[name]) return _headerCache[name];
   var sheet = getSheet(name);
   var lastCol = sheet.getLastColumn();
-  if (lastCol === 0) return [];
-  return sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var headers = lastCol === 0 ? [] : sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  _headerCache[name] = headers;
+  return headers;
 }
 
 // 讀出整張表（不含表頭），每一列轉成 {headerName: value} 物件。
@@ -27,10 +45,9 @@ function getHeaders(name) {
 function readRows(name) {
   var sheet = getSheet(name);
   var lastRow = sheet.getLastRow();
-  var lastCol = sheet.getLastColumn();
-  if (lastRow < 2 || lastCol === 0) return [];
-  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-  var values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  var headers = getHeaders(name);
+  if (lastRow < 2 || headers.length === 0) return [];
+  var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
   var rows = [];
   for (var r = 0; r < values.length; r++) {
     var obj = { __row: r + 2 }; // 記住實際列號，updateRow/deleteRow 用得到
