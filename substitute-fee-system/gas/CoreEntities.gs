@@ -204,11 +204,30 @@ function api_listPeriodSlots() {
 
 // ---------- 專案 ----------
 
+// 專案是否已經被其他資料引用。實際檢查過 Setup.gs 的 SHEET_SCHEMAS：真正存有
+// projectId 欄位、會參照到 Projects 的只有 WeeklyRules／DateRules／SubstituteRecords
+// 這三張表——FeeCalculations／Reconciliation 是附加稽核紀錄（見 Setup.gs 開頭說明），
+// 欄位裡沒有 projectId，本來就不會直接參照專案；如果某筆代課紀錄的費用計算被記錄進
+// FeeCalculations，那筆代課紀錄本身在 SubstituteRecords 裡的 projectId 已經會被這裡
+// 的 SubstituteRecords 檢查涵蓋到，不需要另外重複檢查那兩張稽核表。
+function isProjectInUse(projectId) {
+  var inWeeklyRules = !!findOne("WeeklyRules", function (r) { return r.projectId === projectId; });
+  if (inWeeklyRules) return true;
+  var inDateRules = !!findOne("DateRules", function (r) { return r.projectId === projectId; });
+  if (inDateRules) return true;
+  var inSubstituteRecords = !!findOne("SubstituteRecords", function (r) { return r.projectId === projectId; });
+  if (inSubstituteRecords) return true;
+  return false;
+}
+
 function api_listProjects(payload) {
   requireField(payload, "semesterId", "學期");
   var rows = readRows("Projects").filter(function (r) { return r.semesterId === payload.semesterId; }).map(stripRow);
   return rows.map(function (r) {
-    return { id: r.id, semesterId: r.semesterId, name: r.name, isActive: toBool(r.isActive), note: r.note, createdAt: r.createdAt, updatedAt: r.updatedAt };
+    return {
+      id: r.id, semesterId: r.semesterId, name: r.name, isActive: toBool(r.isActive), note: r.note,
+      createdAt: r.createdAt, updatedAt: r.updatedAt, isInUse: isProjectInUse(r.id),
+    };
   });
 }
 
@@ -246,6 +265,22 @@ function api_setProjectActive(payload) {
   var updated = updateRow("Projects", payload.id, { isActive: isActive, updatedAt: nowIso() });
   writeChangeLog("projects", payload.id, "isActive", String(toBool(existing.isActive)), String(isActive), payload.changedBy, payload.reason || "切換啟用狀態");
   return updated;
+}
+
+// 刪除是實體刪除（從 Projects 移除那一列），只有完全沒有被引用的專案才允許——
+// 一旦被 WeeklyRules／DateRules／SubstituteRecords 任何一筆引用過，一律拒絕，
+// 請使用者改用「停用」。不做 cascade delete，也不會動到任何引用它的歷史資料本身
+// （這裡只是檢查、拒絕，從來不會去改寫或刪除 SubstituteRecords 等其他表）。
+function api_deleteProject(payload) {
+  requireField(payload, "id", "id");
+  var existing = findById("Projects", payload.id);
+  if (!existing) throw new Error("找不到專案");
+  if (isProjectInUse(payload.id)) {
+    throw new Error("此專案已被資料使用，無法刪除。若不再使用，請改為停用。");
+  }
+  deleteRow("Projects", payload.id);
+  writeChangeLog("projects", payload.id, null, existing.name, null, payload.changedBy, payload.reason || "刪除專案（未被任何資料引用）");
+  return { ok: true, id: payload.id };
 }
 
 // ---------- 每週固定規則 ----------
@@ -493,15 +528,25 @@ function api_generateSemesterCalendar(payload) {
   requireField(payload, "semesterId", "學期");
   var semester = findById("Semesters", payload.semesterId);
   if (!semester) throw new Error("找不到學期");
+  // semester.startDate/endDate 有可能是使用者直接在 Sheets 手動輸入的資料（例如既有的
+  // 115 學年度第1學期），讀出來未必是 "YYYY-MM-DD" 字串——先正規化，否則下面的日期
+  // 運算會整批變成 Invalid Date，迴圈一次都不會執行，永遠回報「已產生 0 天」
+  // （這正是這次要修的 bug 本身，見 toDateOnly() 註解）。
+  var startDate = toDateOnly(semester.startDate);
+  var endDate = toDateOnly(semester.endDate);
+  if (!startDate || !endDate) throw new Error("這個學期沒有設定開始或結束日期，無法產生日曆");
+
   var existing = readRows("SchoolCalendarDays").filter(function (r) { return r.semesterId === payload.semesterId; });
   var existingDates = {};
   existing.forEach(function (d) { existingDates[d.date] = true; });
 
   var toCreate = [];
-  var cursor = new Date(semester.startDate + "T00:00:00Z");
-  var end = new Date(semester.endDate + "T00:00:00Z");
+  var cursor = new Date(startDate + "T00:00:00Z");
+  var end = new Date(endDate + "T00:00:00Z");
   while (cursor.getTime() <= end.getTime()) {
     var dateOnly = cursor.toISOString().slice(0, 10);
+    // 已經存在的日期（不論是先前產生過，還是管理者手動修改過）一律跳過，不覆蓋、
+    // 不重複新增——人工設定過的休假日／上課日狀態一定要保留原樣。
     if (!existingDates[dateOnly]) {
       var weekday = weekdayOfDateOnly(dateOnly);
       toCreate.push({
@@ -513,8 +558,10 @@ function api_generateSemesterCalendar(payload) {
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   if (toCreate.length > 0) appendRows("SchoolCalendarDays", toCreate);
-  writeChangeLog("school_calendar_days", payload.semesterId, null, null, "新增 " + toCreate.length + " 天", payload.changedBy, "批次產生學期日曆（略過已存在 " + existing.length + " 天）");
-  return { createdCount: toCreate.length, skippedCount: existing.length };
+  writeChangeLog("school_calendar_days", payload.semesterId, null, null,
+    "新增 " + toCreate.length + " 天（" + startDate + " ~ " + endDate + "，原本已有 " + existing.length + " 天）",
+    payload.changedBy, "批次產生學期日曆");
+  return { createdCount: toCreate.length, skippedCount: existing.length, startDate: startDate, endDate: endDate };
 }
 
 function api_listCalendarDays(payload) {

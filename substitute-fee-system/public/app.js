@@ -186,8 +186,22 @@ async function init() {
     loadCalendar();
   });
   qs("#btnGenerateCalendar").addEventListener("click", async () => {
-    const result = await gasApi("generateSemesterCalendar", { semesterId: state.semesterId, changedBy: state.changedBy || undefined });
-    alert(`已產生 ${result.createdCount} 天（略過已存在 ${result.skippedCount} 天）`);
+    if (!state.semesterId) {
+      alert("請先在畫面上方選擇學期");
+      return;
+    }
+    let result;
+    try {
+      result = await gasApi("generateSemesterCalendar", { semesterId: state.semesterId, changedBy: state.changedBy || undefined });
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+    if (result.createdCount === 0 && result.skippedCount > 0) {
+      alert(`這個學期已經產生過日曆：已有 ${result.skippedCount} 天，這次新增 0 天。`);
+    } else {
+      alert(`已產生 ${result.createdCount} 天（略過已存在 ${result.skippedCount} 天）`);
+    }
     await setupCalendarMonthOptions();
     await loadCalendar();
   });
@@ -666,6 +680,7 @@ async function loadProjects() {
         <td>
           <button data-action="edit">編輯</button>
           <button data-action="toggle" class="${p.isActive ? "danger" : ""}">${p.isActive ? "停用" : "啟用"}</button>
+          ${!p.isInUse ? `<button data-action="delete" class="danger">刪除</button>` : ""}
         </td>
       </tr>`
     )
@@ -683,6 +698,23 @@ async function loadProjects() {
       const proj = projects.find((p) => p.id === id);
       await gasApi("setProjectActive", { id, isActive: !proj.isActive, changedBy: state.changedBy || undefined });
       await loadForSemester();
+    })
+  );
+  // 只有目前完全沒被 WeeklyRules／DateRules／SubstituteRecords 引用的專案才會顯示這顆
+  // 按鈕（見 gasApi listProjects 回傳的 isInUse），但後端仍然會在真正刪除前再檢查一次
+  // ——避免使用者看到按鈕之後、真的按下去之前，這段時間專案剛好被別的地方引用到。
+  tbody.querySelectorAll("button[data-action='delete']").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      const proj = projects.find((p) => p.id === id);
+      if (!confirm(`確定要刪除此專案嗎？刪除後無法復原。\n\n專案名稱：${proj.name}`)) return;
+      try {
+        await gasApi("deleteProject", { id, changedBy: state.changedBy || undefined });
+        await loadForSemester();
+      } catch (err) {
+        alert(err.message);
+        await loadForSemester();
+      }
     })
   );
 }

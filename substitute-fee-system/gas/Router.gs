@@ -29,6 +29,7 @@ var ACTIONS = {
   createProject: api_createProject,
   updateProject: api_updateProject,
   setProjectActive: api_setProjectActive,
+  deleteProject: api_deleteProject,
   listWeeklyRules: api_listWeeklyRules,
   weeklyRuleConflicts: api_weeklyRuleConflicts,
   createWeeklyRule: api_createWeeklyRule,
