@@ -60,6 +60,7 @@ model Semester {
   schoolCalendarDays SchoolCalendarDay[]
   monthlyImports     MonthlyImport[]
   monthlyLocks       MonthlyLock[]
+  monthlyIssueAcknowledgements MonthlyIssueAcknowledgement[]
 
   @@unique([schoolYear, term])
   @@index([isCurrent])
@@ -434,10 +435,20 @@ enum ClassificationMethod {
   TEACHER_UNMATCHED // 原教師尚未配對到 Person，無法查詢規則
 }
 
+// 一筆 SubstituteRecord 的來源：絕大多數是 Excel 匯入，但 Implementation Batch
+// 新增「自費代課」——由管理者在網站上手動輸入，沒有對應的 Excel 原始列。
+enum SubstituteRecordEntryType {
+  EXCEL_IMPORT
+  MANUAL_SELF_FUNDED
+}
+
 model SubstituteRecord {
   id                   String               @id @default(cuid())
-  rawRecordId          String               @unique
-  rawRecord            SubstituteRecordRaw  @relation(fields: [rawRecordId], references: [id])
+  // 自費代課沒有對應的 Excel 原始列，所以改為可為 null；
+  // EXCEL_IMPORT 的紀錄仍然一定要有 rawRecordId（由 excelImportService 保證)。
+  rawRecordId          String?              @unique
+  rawRecord            SubstituteRecordRaw? @relation(fields: [rawRecordId], references: [id])
+  entryType            SubstituteRecordEntryType @default(EXCEL_IMPORT)
   monthlyImportId      String
   monthlyImport        MonthlyImport        @relation(fields: [monthlyImportId], references: [id])
   originalTeacherId    String?
@@ -477,6 +488,10 @@ model SubstituteRecord {
   manualOverrideBy     String?
 
   note      String?
+  // EXCEL_IMPORT 的建立者／來源已經由 MonthlyImport.importedBy 記錄，這兩個欄位主要
+  // 給 MANUAL_SELF_FUNDED 使用，才能追蹤「誰手動輸入／修改了這筆自費代課」。
+  createdBy String?
+  updatedBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -484,6 +499,34 @@ model SubstituteRecord {
   @@index([originalTeacherId])
   @@index([substituteTeacherId])
   @@index([date])
+}
+
+// ============================================================
+// 十五、月結問題確認（Implementation Batch）
+//
+// 「已確認／接受」不是消除錯誤：原始問題（SubstituteRecord 的 TEACHER_UNMATCHED／
+// CONFLICT／amount=null，或 MonthlyImportError）永遠原樣保留、可查詢。這張表只記錄
+// 「管理者已經看過這筆問題、知道原因、同意讓它不再阻擋這個月的月結」這件事本身。
+// ============================================================
+
+model MonthlyIssueAcknowledgement {
+  id             String   @id @default(cuid())
+  semesterId     String
+  semester       Semester @relation(fields: [semesterId], references: [id])
+  year           Int
+  month          Int
+  targetTable    String // "SubstituteRecord" 或 "MonthlyImportError"
+  targetId       String
+  reason         String
+  acknowledgedBy String
+  acknowledgedAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // 同一筆問題只會有一筆「目前有效」的確認紀錄；如果要改理由，用更新的方式處理，
+  // 不會因為重複點擊而產生一堆重複資料列。
+  @@unique([targetTable, targetId])
+  @@index([semesterId, year, month])
 }
 
 // ============================================================

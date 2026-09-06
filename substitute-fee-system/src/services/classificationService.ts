@@ -24,6 +24,7 @@ import type {
 } from "@prisma/client";
 import { ClassificationMethod } from "@prisma/client";
 import { prisma } from "../prismaClient";
+import { assertMonthNotLocked, assertRecordMonthNotLocked } from "./monthlyLockService";
 
 interface ConflictCandidate {
   ruleId: string;
@@ -188,6 +189,7 @@ export async function classifySubstituteRecord(
     where: { id: recordId },
     include: { monthlyImport: true },
   });
+  await assertMonthNotLocked(record.monthlyImport.year, record.monthlyImport.month);
   const semester = await prisma.semester.findUniqueOrThrow({ where: { id: record.monthlyImport.semesterId } });
 
   const outcome = await computeClassification(record, semester);
@@ -302,6 +304,7 @@ export async function overrideClassification(
   }
 
   const existing = await prisma.substituteRecord.findUniqueOrThrow({ where: { id: recordId } });
+  await assertRecordMonthNotLocked(recordId);
 
   const updated = await prisma.substituteRecord.update({
     where: { id: recordId },
@@ -340,6 +343,7 @@ export async function revertToAutoClassification(
   reason: string
 ): Promise<SubstituteRecord> {
   const record = await prisma.substituteRecord.findUniqueOrThrow({ where: { id: recordId } });
+  await assertRecordMonthNotLocked(recordId);
   if (!record.isManuallyModified) {
     throw new Error("此筆尚未被人工覆寫，不需要復原");
   }
@@ -381,7 +385,7 @@ export interface ClassificationPreviewFilter {
 }
 
 export async function listClassificationPreview(monthlyImportId: string, filter: ClassificationPreviewFilter = {}) {
-  return prisma.substituteRecord.findMany({
+  const records = await prisma.substituteRecord.findMany({
     where: {
       monthlyImportId,
       ...(filter.fundingSource ? { fundingSource: filter.fundingSource } : {}),
@@ -392,4 +396,67 @@ export async function listClassificationPreview(monthlyImportId: string, filter:
     include: { originalTeacher: true, substituteTeacher: true, project: true, rawRecord: true },
     orderBy: [{ date: "asc" }],
   });
+
+  const withBasis = await Promise.all(
+    records.map(async (r) => ({ ...r, classificationBasisText: await describeClassificationBasis(r) }))
+  );
+  return withBasis;
+}
+
+// Implementation Batch：把分類結果講成使用者看得懂的一句話，不要只丟 WEEKLY_RULE / ruleId。
+// 純粹是「把已經存在的欄位組合成人話」，不影響任何分類判斷本身。
+const WEEKDAY_LABEL: Record<string, string> = { MON: "星期一", TUE: "星期二", WED: "星期三", THU: "星期四", FRI: "星期五", SAT: "星期六", SUN: "星期日" };
+const FUNDING_SOURCE_LABEL: Record<string, string> = { GENERAL: "一般公費", OVERTIME: "超鐘點", PROJECT: "專案", UNDETERMINED: "待確認" };
+
+export async function describeClassificationBasis(record: {
+  classificationMethod: ClassificationMethod;
+  classificationRuleId: string | null;
+  fundingSource: FundingSource;
+  projectId: string | null;
+  conflictCandidatesJson: string | null;
+}): Promise<string> {
+  const fundingLabel = FUNDING_SOURCE_LABEL[record.fundingSource] ?? record.fundingSource;
+
+  switch (record.classificationMethod) {
+    case ClassificationMethod.WEEKLY_RULE: {
+      if (!record.classificationRuleId) return `每週規則 → ${fundingLabel}`;
+      const rule = await prisma.specialWeeklyRule.findUnique({
+        where: { id: record.classificationRuleId },
+        include: { project: true },
+      });
+      if (!rule) return `每週規則（規則已不存在）→ ${fundingLabel}`;
+      const projectPart = rule.project ? `：${rule.project.name}` : "";
+      return `每週規則：${WEEKDAY_LABEL[rule.weekday] ?? rule.weekday} ${rule.periodCode} → ${fundingLabel}${projectPart}`;
+    }
+    case ClassificationMethod.DATE_EXCEPTION: {
+      if (!record.classificationRuleId) return `單日例外 → ${fundingLabel}`;
+      const rule = await prisma.specialDateRule.findUnique({
+        where: { id: record.classificationRuleId },
+        include: { project: true },
+      });
+      if (!rule) return `單日例外（規則已不存在）→ ${fundingLabel}`;
+      const projectPart = rule.project ? `：${rule.project.name}` : "";
+      return `單日例外：${rule.date.toISOString().slice(0, 10)} ${rule.periodCode} → ${fundingLabel}${projectPart}`;
+    }
+    case ClassificationMethod.GENERAL_DEFAULT:
+      return "一般公費：沒有符合特殊規則";
+    case ClassificationMethod.MANUAL_OVERRIDE:
+      return `人工覆寫 → ${fundingLabel}`;
+    case ClassificationMethod.CONFLICT: {
+      let count = 0;
+      if (record.conflictCandidatesJson) {
+        try {
+          const parsed = JSON.parse(record.conflictCandidatesJson);
+          count = Array.isArray(parsed?.candidates) ? parsed.candidates.length : 0;
+        } catch {
+          /* ignore */
+        }
+      }
+      return `規則衝突：同時符合 ${count || "多"} 個規則，需要人工確認`;
+    }
+    case ClassificationMethod.TEACHER_UNMATCHED:
+      return "原教師尚未配對，無法判斷規則";
+    default:
+      return fundingLabel;
+  }
 }

@@ -17,6 +17,27 @@ const CLASSIFICATION_METHOD_LABEL = {
 const WEEKDAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 const WEEKDAY_LABEL_SHORT = { MON: "一", TUE: "二", WED: "三", THU: "四", FRI: "五", SAT: "六", SUN: "日" };
 
+const PENDING_ISSUE_TYPE_LABEL = {
+  TEACHER_UNMATCHED: "原教師未配對",
+  CONFLICT: "規則衝突",
+  AMOUNT_MISSING: "金額無法計算",
+  IMPORT_ERROR: "匯入錯誤",
+};
+
+const RECONCILIATION_STATUS_LABEL = {
+  MATCH: "✅ 一致",
+  SYSTEM_LESS: "⬇️ 系統較少",
+  SYSTEM_MORE: "⬆️ 系統較多",
+  ONLY_SYSTEM: "僅系統有",
+  ONLY_ORIGINAL: "僅原始有",
+  UNCERTAIN: "待確認",
+};
+
+// Implementation Batch：月結首頁／待處理／自費代課／給出納／對帳共用同一組「學期＋年月」，
+// 這五個分頁本質上都是在看／處理同一個月結期間的狀態，所以用同一個 state 欄位，
+// 在任一分頁切換年月時，其餘分頁的選單也一併同步。
+const CLOSE_PERIOD_SELECT_IDS = ["closePeriodSelect", "pendingPeriodSelect", "selfFundedPeriodSelect", "chunaPeriodSelect", "reconciliationPeriodSelect"];
+
 const state = {
   semesterId: null,
   semesters: [],
@@ -30,6 +51,8 @@ const state = {
   currentImportId: null,
   classificationBatchId: null,
   feeCalcPeriod: null, // { year, month }
+  closePeriod: null, // { year, month }，月結首頁／待處理／自費代課／給出納／對帳共用
+  chunaBatchIds: [],
 };
 
 const FEE_TYPE_LABEL = {
@@ -67,7 +90,13 @@ async function init() {
     localStorage.setItem("changedBy", state.changedBy);
   });
 
-  qsa(".tab-btn").forEach((btn) => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
+  qsa(".tab-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      switchTab(btn.dataset.tab);
+      const loader = TAB_LOADERS[btn.dataset.tab];
+      if (loader) loader();
+    })
+  );
   qsa(".subtab-btn").forEach((btn) =>
     btn.addEventListener("click", () => {
       state.ruleType = btn.dataset.ruletype;
@@ -152,6 +181,13 @@ async function init() {
   });
   qs("#btnRunFeeCalculation").addEventListener("click", runFeeCalculation);
 
+  qs("#btnRefreshDashboard").addEventListener("click", loadDashboard);
+  qs("#btnRefreshPending").addEventListener("click", loadPendingIssues);
+  qs("#btnNewSelfFunded").addEventListener("click", () => openSelfFundedForm());
+  qs("#btnLoadChuna").addEventListener("click", loadChuna);
+  qs("#btnExportChuna").addEventListener("click", exportChuna);
+  qs("#btnRunReconciliation").addEventListener("click", runReconciliation);
+
   const semesters = await api("/api/semesters");
   state.semesters = semesters;
   const select = qs("#semesterSelect");
@@ -182,6 +218,12 @@ function switchTab(tab) {
   qsa(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${tab}`));
 }
 
+const TAB_LOADERS = {
+  dashboard: loadDashboard,
+  pendingIssues: loadPendingIssues,
+  selfFunded: loadSelfFunded,
+};
+
 async function loadForSemester() {
   if (!state.semesterId) return;
   state.projects = await api(`/api/projects?semesterId=${state.semesterId}`);
@@ -194,6 +236,7 @@ async function loadForSemester() {
   await setupClassificationBatchOptions();
   await loadFeeRules();
   setupFeeCalcPeriodOptions();
+  setupClosePeriodOptions();
 }
 
 // ---------- 每週固定規則 ----------
@@ -939,6 +982,7 @@ async function loadClassificationPreview() {
           <td>${STAFF_TYPE_LABEL[r.staffType] || r.staffType}</td>
           <td>${FUNDING_SOURCE_LABEL[r.fundingSource] || r.fundingSource}</td>
           <td>${CLASSIFICATION_METHOD_LABEL[r.classificationMethod] || r.classificationMethod}</td>
+          <td>${r.classificationBasisText ?? ""}</td>
           <td>${r.project?.name ?? ""}</td>
           <td>${status}</td>
           <td>
@@ -1162,6 +1206,499 @@ async function runFeeCalculation() {
         <td>${r.projectAmount}</td>
         <td>${r.totalCount}</td>
         <td>${r.totalAmount}</td>
+      </tr>`
+    )
+    .join("");
+}
+
+// ---------- Implementation Batch：共用「學期＋年月」選單 ----------
+
+function setupClosePeriodOptions() {
+  const semester = getCurrentSemester();
+  if (!semester) return;
+  const months = monthRange(semester.startDate, semester.endDate);
+  const optionsHtml = months.map((m) => `<option value="${m.year}-${m.month}">${m.year}年${m.month}月</option>`).join("");
+  const hasCurrent = state.closePeriod && months.some((m) => m.year === state.closePeriod.year && m.month === state.closePeriod.month);
+  state.closePeriod = hasCurrent ? state.closePeriod : months[0];
+
+  CLOSE_PERIOD_SELECT_IDS.forEach((id) => {
+    const el = qs(`#${id}`);
+    if (!el) return;
+    el.innerHTML = optionsHtml;
+    if (state.closePeriod) el.value = `${state.closePeriod.year}-${state.closePeriod.month}`;
+    el.onchange = () => {
+      const [year, month] = el.value.split("-").map(Number);
+      state.closePeriod = { year, month };
+      CLOSE_PERIOD_SELECT_IDS.forEach((otherId) => {
+        if (otherId !== id) {
+          const otherEl = qs(`#${otherId}`);
+          if (otherEl) otherEl.value = el.value;
+        }
+      });
+    };
+  });
+}
+
+async function getActiveBatchIdsForClosePeriod() {
+  if (!state.semesterId || !state.closePeriod) return [];
+  const batches = await api(`/api/monthly-imports?semesterId=${state.semesterId}`);
+  return batches
+    .filter((b) => b.year === state.closePeriod.year && b.month === state.closePeriod.month && b.status === "ACTIVE")
+    .map((b) => b.id);
+}
+
+// ---------- Implementation Batch：月結首頁 ----------
+
+async function loadDashboard() {
+  if (!state.semesterId || !state.closePeriod) return;
+  const { year, month } = state.closePeriod;
+  const dashboard = await api(`/api/monthly-dashboard?semesterId=${state.semesterId}&year=${year}&month=${month}`);
+  renderDashboard(dashboard);
+}
+
+function renderDashboard(d) {
+  const lockLabel = d.lock.isLocked
+    ? `🔒 已鎖定（${d.lock.lockedBy}，${new Date(d.lock.lockedAt).toLocaleString("zh-TW")}）`
+    : "🔓 未鎖定";
+  const batchesHtml =
+    d.import.batches
+      .map((b) => `${STAFF_TYPE_LABEL[b.sourceStaffType] || b.sourceStaffType} v${b.versionNo}：總筆數${b.totalCount}｜成功${b.successCount}｜錯誤${b.errorCount}`)
+      .join("<br>") || "尚無有效匯入批次";
+
+  const el = qs("#dashboardContent");
+  el.innerHTML = `
+    <div class="dashboard-grid">
+      <div class="dashboard-card">
+        <h3>匯入</h3>
+        <p>${batchesHtml}</p>
+        <p>合計成功 ${d.import.successCount}｜合計錯誤 ${d.import.errorCount}</p>
+      </div>
+      <div class="dashboard-card">
+        <h3>分類</h3>
+        <p>一般公費 ${d.classification.general}｜超鐘點 ${d.classification.overtime}｜專案 ${d.classification.project}</p>
+        <p>規則衝突 ${d.classification.conflict}｜原教師未配對 ${d.classification.teacherUnmatched}</p>
+      </div>
+      <div class="dashboard-card">
+        <h3>費用</h3>
+        <p>已計算 ${d.fee.calculatedCount} 筆｜尚未計算 ${d.fee.notCalculatedCount} 筆</p>
+        <p>公費金額合計：${d.fee.totalAmount}</p>
+        <p>自費代課：${d.selfFunded.exists ? `${d.selfFunded.count} 筆（不列入公費金額）` : "無"}</p>
+      </div>
+      <div class="dashboard-card">
+        <h3>問題</h3>
+        <p>原教師未配對 ${d.issues.blocking.teacherUnmatched}｜規則衝突 ${d.issues.blocking.conflict}｜金額無法計算 ${d.issues.blocking.amountMissing}｜匯入錯誤 ${d.issues.blocking.importErrors}</p>
+        <p>合計阻擋 ${d.issues.blocking.total} 筆｜已確認接受 ${d.issues.acknowledgedCount} 筆</p>
+      </div>
+      <div class="dashboard-card">
+        <h3>月結</h3>
+        <p>${lockLabel}</p>
+        <div class="modal-actions" style="justify-content: flex-start;">
+          ${d.lock.isLocked ? `<button id="btnUnlockMonth" class="danger">解除鎖定</button>` : `<button id="btnLockMonth">鎖定本月</button>`}
+        </div>
+      </div>
+    </div>`;
+
+  if (d.lock.isLocked) {
+    qs("#btnUnlockMonth").addEventListener("click", openUnlockForm);
+  } else {
+    qs("#btnLockMonth").addEventListener("click", openLockForm);
+  }
+}
+
+function openLockForm() {
+  const body = `
+    <h2>鎖定 ${state.closePeriod.year}年${state.closePeriod.month}月</h2>
+    <p class="hint">鎖定前系統會自動檢查阻擋性問題（原教師未配對／規則衝突／金額無法計算／匯入錯誤），若有未確認接受的問題會拒絕鎖定，請先到「待處理」處理或確認接受。</p>
+    <label>操作人<input id="f-lockedBy" type="text" value="${state.changedBy}" /></label>
+    <div class="error-text" id="f-error" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="f-cancel">取消</button>
+      <button type="button" id="f-submit">確認鎖定</button>
+    </div>`;
+  showModal(body);
+  qs("#f-cancel").addEventListener("click", closeModal);
+  qs("#f-submit").addEventListener("click", async () => {
+    try {
+      const lockedBy = qs("#f-lockedBy").value.trim();
+      if (!lockedBy) throw new Error("請輸入操作人");
+      await api("/api/monthly-lock/lock", {
+        method: "POST",
+        body: JSON.stringify({ semesterId: state.semesterId, year: state.closePeriod.year, month: state.closePeriod.month, lockedBy }),
+      });
+      closeModal();
+      await loadDashboard();
+    } catch (err) {
+      showFormError(err.message);
+    }
+  });
+}
+
+function openUnlockForm() {
+  const body = `
+    <h2>解除鎖定 ${state.closePeriod.year}年${state.closePeriod.month}月</h2>
+    <label>操作人<input id="f-unlockedBy" type="text" value="${state.changedBy}" /></label>
+    <label>解鎖理由（必填）<input id="f-reason" type="text" /></label>
+    <div class="error-text" id="f-error" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="f-cancel">取消</button>
+      <button type="button" id="f-submit">確認解鎖</button>
+    </div>`;
+  showModal(body);
+  qs("#f-cancel").addEventListener("click", closeModal);
+  qs("#f-submit").addEventListener("click", async () => {
+    try {
+      const unlockedBy = qs("#f-unlockedBy").value.trim();
+      const reason = qs("#f-reason").value.trim();
+      if (!unlockedBy) throw new Error("請輸入操作人");
+      if (!reason) throw new Error("請輸入解鎖理由");
+      await api("/api/monthly-lock/unlock", {
+        method: "POST",
+        body: JSON.stringify({ semesterId: state.semesterId, year: state.closePeriod.year, month: state.closePeriod.month, unlockedBy, reason }),
+      });
+      closeModal();
+      await loadDashboard();
+    } catch (err) {
+      showFormError(err.message);
+    }
+  });
+}
+
+// ---------- Implementation Batch：待處理 ----------
+
+async function loadPendingIssues() {
+  if (!state.semesterId || !state.closePeriod) return;
+  const { year, month } = state.closePeriod;
+  const issues = await api(`/api/pending-issues?semesterId=${state.semesterId}&year=${year}&month=${month}`);
+  const tbody = qs("#pendingIssuesTable tbody");
+  tbody.innerHTML = issues
+    .map((r, idx) => {
+      const statusText =
+        r.status === "ACKNOWLEDGED"
+          ? `✅ 已確認接受<br><small>${r.acknowledgement.reason}（${r.acknowledgement.acknowledgedBy}）</small>`
+          : "⚠️ 待處理";
+      return `
+        <tr data-idx="${idx}" class="${r.status === "ACKNOWLEDGED" ? "" : "conflict-row"}">
+          <td>${r.date ?? ""}</td>
+          <td>${r.originalTeacher ?? ""}</td>
+          <td>${r.substituteTeacher ?? ""}</td>
+          <td>${r.periodCode ?? ""}</td>
+          <td>${r.className ?? ""}</td>
+          <td>${r.subject ?? ""}</td>
+          <td>${PENDING_ISSUE_TYPE_LABEL[r.issueType] || r.issueType}</td>
+          <td>${r.description}</td>
+          <td>${statusText}</td>
+          <td>${r.status === "ACKNOWLEDGED" ? `<button data-action="revoke">撤銷確認</button>` : `<button data-action="acknowledge">確認接受</button>`}</td>
+        </tr>`;
+    })
+    .join("");
+
+  tbody.querySelectorAll("button[data-action='acknowledge']").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      const idx = Number(e.target.closest("tr").dataset.idx);
+      openAcknowledgeForm(issues[idx]);
+    })
+  );
+  tbody.querySelectorAll("button[data-action='revoke']").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      const idx = Number(e.target.closest("tr").dataset.idx);
+      const issue = issues[idx];
+      try {
+        await api("/api/issue-acknowledgements/revoke", {
+          method: "POST",
+          body: JSON.stringify({ targetTable: issue.targetTable, targetId: issue.targetId, changedBy: state.changedBy || undefined }),
+        });
+        await loadPendingIssues();
+      } catch (err) {
+        alert(err.message);
+      }
+    })
+  );
+}
+
+function openAcknowledgeForm(issue) {
+  const body = `
+    <h2>確認接受問題</h2>
+    <p>${PENDING_ISSUE_TYPE_LABEL[issue.issueType] || issue.issueType}：${issue.description}</p>
+    <p class="hint">確認接受不會刪除或修改原始資料，只是註記「已經看過、同意讓它不再阻擋本月鎖定」，這筆問題仍會保留在清單中可查詢。</p>
+    <label>確認人<input id="f-ackBy" type="text" value="${state.changedBy}" /></label>
+    <label>確認理由（必填）<input id="f-reason" type="text" /></label>
+    <div class="error-text" id="f-error" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="f-cancel">取消</button>
+      <button type="button" id="f-submit">確認</button>
+    </div>`;
+  showModal(body);
+  qs("#f-cancel").addEventListener("click", closeModal);
+  qs("#f-submit").addEventListener("click", async () => {
+    try {
+      const acknowledgedBy = qs("#f-ackBy").value.trim();
+      const reason = qs("#f-reason").value.trim();
+      if (!acknowledgedBy) throw new Error("請輸入確認人");
+      if (!reason) throw new Error("請輸入確認理由");
+      await api("/api/issue-acknowledgements", {
+        method: "POST",
+        body: JSON.stringify({
+          semesterId: state.semesterId,
+          year: state.closePeriod.year,
+          month: state.closePeriod.month,
+          targetTable: issue.targetTable,
+          targetId: issue.targetId,
+          reason,
+          acknowledgedBy,
+        }),
+      });
+      closeModal();
+      await loadPendingIssues();
+    } catch (err) {
+      showFormError(err.message);
+    }
+  });
+}
+
+// ---------- Implementation Batch：自費代課 ----------
+
+async function loadSelfFunded() {
+  if (!state.semesterId || !state.closePeriod) return;
+  const { year, month } = state.closePeriod;
+  const records = await api(`/api/self-funded?semesterId=${state.semesterId}&year=${year}&month=${month}`);
+  const tbody = qs("#selfFundedTable tbody");
+  tbody.innerHTML = records
+    .map(
+      (r) => `
+      <tr data-id="${r.id}">
+        <td>${dateOnly(r.date)}</td>
+        <td>${r.originalTeacher?.name ?? ""}</td>
+        <td>${r.substituteTeacher?.name ?? ""}</td>
+        <td>${r.periodCode ?? ""}</td>
+        <td>${r.className ?? ""}</td>
+        <td>${r.subject ?? ""}</td>
+        <td>${r.amount ?? ""}</td>
+        <td>${r.note ?? ""}</td>
+        <td>${r.createdBy ?? ""}</td>
+        <td>
+          <button data-action="edit">編輯</button>
+          <button data-action="delete" class="danger">刪除</button>
+        </td>
+      </tr>`
+    )
+    .join("");
+
+  tbody.querySelectorAll("button[data-action='edit']").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      openSelfFundedForm(records.find((r) => r.id === id));
+    })
+  );
+  tbody.querySelectorAll("button[data-action='delete']").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      const reason = prompt("刪除原因（必填）：");
+      if (!reason) return;
+      try {
+        await api(`/api/self-funded/${id}`, {
+          method: "DELETE",
+          body: JSON.stringify({ deletedBy: state.changedBy || undefined, reason }),
+        });
+        await loadSelfFunded();
+      } catch (err) {
+        alert(err.message);
+      }
+    })
+  );
+}
+
+async function findPersonByExactName(name) {
+  if (!name) return null;
+  const matches = await api(`/api/persons?search=${encodeURIComponent(name)}`);
+  return matches.find((p) => p.name === name) || null;
+}
+
+function openSelfFundedForm(existing) {
+  if (!state.closePeriod) {
+    alert("請先在畫面上方選擇學期＋年月");
+    return;
+  }
+  const body = `
+    <h2>${existing ? "編輯" : "新增"}自費代課</h2>
+    <label>日期<input id="f-date" type="date" value="${dateOnly(existing?.date) || ""}" /></label>
+    <label>原教師姓名（選填）<input id="f-originalTeacherName" type="text" value="${existing?.originalTeacher?.name ?? ""}" /></label>
+    <label>代課教師姓名（必填）<input id="f-substituteTeacherName" type="text" value="${existing?.substituteTeacher?.name ?? ""}" /></label>
+    <label>節次<select id="f-periodCode"><option value="">（未填）</option>${periodOptions(existing?.periodCode)}</select></label>
+    <label>班級<input id="f-className" type="text" value="${existing?.className ?? ""}" /></label>
+    <label>科目<input id="f-subject" type="text" value="${existing?.subject ?? ""}" /></label>
+    <label>金額（必填）<input id="f-amount" type="number" step="0.01" value="${existing?.amount ?? ""}" /></label>
+    <label>備註<textarea id="f-note">${existing?.note ?? ""}</textarea></label>
+    <div class="error-text" id="f-error" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="f-cancel">取消</button>
+      <button type="button" id="f-submit">儲存</button>
+    </div>`;
+  showModal(body);
+  qs("#f-cancel").addEventListener("click", closeModal);
+  qs("#f-submit").addEventListener("click", async () => {
+    try {
+      const date = qs("#f-date").value;
+      const substituteName = qs("#f-substituteTeacherName").value.trim();
+      const originalName = qs("#f-originalTeacherName").value.trim();
+      const amount = qs("#f-amount").value;
+      if (!date) throw new Error("請填寫日期");
+      if (!substituteName) throw new Error("請填寫代課教師姓名");
+      if (!amount) throw new Error("請填寫金額");
+
+      const substitutePerson = await findPersonByExactName(substituteName);
+      if (!substitutePerson) throw new Error(`系統找不到教師「${substituteName}」，請先在人員管理建立此人員`);
+      let originalPerson = null;
+      if (originalName) {
+        originalPerson = await findPersonByExactName(originalName);
+        if (!originalPerson) throw new Error(`系統找不到教師「${originalName}」，請先在人員管理建立此人員`);
+      }
+
+      const payload = {
+        date,
+        originalTeacherId: originalPerson?.id,
+        substituteTeacherId: substitutePerson.id,
+        periodCode: qs("#f-periodCode").value || undefined,
+        className: qs("#f-className").value.trim() || undefined,
+        subject: qs("#f-subject").value.trim() || undefined,
+        amount,
+        note: qs("#f-note").value.trim() || undefined,
+      };
+
+      if (existing) {
+        await api(`/api/self-funded/${existing.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ ...payload, updatedBy: state.changedBy || undefined }),
+        });
+      } else {
+        await api("/api/self-funded", {
+          method: "POST",
+          body: JSON.stringify({
+            ...payload,
+            semesterId: state.semesterId,
+            year: state.closePeriod.year,
+            month: state.closePeriod.month,
+            createdBy: state.changedBy || undefined,
+          }),
+        });
+      }
+      closeModal();
+      await loadSelfFunded();
+    } catch (err) {
+      showFormError(err.message);
+    }
+  });
+}
+
+// ---------- Implementation Batch：給出納 ----------
+
+async function loadChuna() {
+  if (!state.semesterId || !state.closePeriod) return;
+  const ids = await getActiveBatchIdsForClosePeriod();
+  state.chunaBatchIds = ids;
+  if (ids.length === 0) {
+    qs("#chunaContent").innerHTML = "<p>這個年月沒有有效的匯入批次，請先到「公費代課匯入」上傳。</p>";
+    return;
+  }
+  const summary = await api(`/api/chuna-summary?ids=${ids.join(",")}`);
+  renderChuna(summary);
+}
+
+function renderChunaSection(title, rows) {
+  if (rows.length === 0) return "";
+  const totalCount = rows.reduce((s, r) => s + r.totalCount, 0);
+  const totalAmount = rows.reduce((s, r) => s + Number(r.totalAmount), 0);
+  return `
+    <h3>${title}</h3>
+    <table>
+      <thead><tr><th>薪資代碼</th><th>教師</th><th>一般公費（節數／金額）</th><th>超鐘點（節數／金額）</th><th>專案（節數／金額）</th><th>總節數</th><th>總金額</th></tr></thead>
+      <tbody>
+        ${rows
+          .map(
+            (r) => `
+          <tr>
+            <td>${r.payrollCode ?? ""}</td>
+            <td>${r.substituteTeacherName}</td>
+            <td>${r.generalCount} ／ ${r.generalAmount}</td>
+            <td>${r.overtimeCount} ／ ${r.overtimeAmount}</td>
+            <td>${r.projectCount} ／ ${r.projectAmount}</td>
+            <td>${r.totalCount}</td>
+            <td>${r.totalAmount}</td>
+          </tr>`
+          )
+          .join("")}
+        <tr class="total-row"><td colspan="5">總計</td><td>${totalCount}</td><td>${totalAmount}</td></tr>
+      </tbody>
+    </table>`;
+}
+
+function renderChuna(summary) {
+  const html =
+    renderChunaSection("編制外（非BD）", summary.nonBd) +
+    renderChunaSection("編制內（BD）", summary.bd) +
+    renderChunaSection("未標示來源", summary.unknown);
+  qs("#chunaContent").innerHTML = html || "<p>這個年月目前沒有可以彙總的資料。</p>";
+}
+
+async function exportChuna() {
+  if (!state.semesterId || !state.closePeriod) return;
+  const ids = state.chunaBatchIds.length > 0 ? state.chunaBatchIds : await getActiveBatchIdsForClosePeriod();
+  if (ids.length === 0) {
+    alert("這個年月沒有有效的匯入批次");
+    return;
+  }
+  const url = `/api/chuna-export?ids=${ids.join(",")}&year=${state.closePeriod.year}&month=${state.closePeriod.month}`;
+  window.location.href = url;
+}
+
+// ---------- Implementation Batch：對帳 ----------
+
+async function runReconciliation() {
+  const fileInput = qs("#reconciliationFile");
+  if (!fileInput.files || fileInput.files.length === 0) {
+    alert("請先選擇要比對的原始給出納 Excel 檔案");
+    return;
+  }
+  if (!state.semesterId || !state.closePeriod) return;
+  const ids = await getActiveBatchIdsForClosePeriod();
+  if (ids.length === 0) {
+    alert("這個年月沒有有效的匯入批次，無法比對");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+  formData.append("ids", ids.join(","));
+
+  let result;
+  try {
+    const res = await fetch("/api/reconciliation", { method: "POST", body: formData });
+    result = await res.json();
+    if (!res.ok) throw new Error(result.error || "比對失敗");
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  renderReconciliation(result);
+}
+
+function renderReconciliation(result) {
+  const summaryEl = qs("#reconciliationSummary");
+  summaryEl.hidden = false;
+  summaryEl.textContent = `系統總額：${result.totals.systemAmount}｜原始總額：${result.totals.originalAmount}｜差額：${result.totals.diff}`;
+
+  const tbody = qs("#reconciliationTable tbody");
+  tbody.innerHTML = result.rows
+    .map(
+      (r) => `
+      <tr class="${r.status === "MATCH" ? "" : "conflict-row"}">
+        <td>${r.name}</td>
+        <td>${r.systemPeriodCount ?? "－"}</td>
+        <td>${r.originalPeriodCount ?? "－"}</td>
+        <td>${r.systemAmount ?? "－"}</td>
+        <td>${r.originalAmount ?? "－"}</td>
+        <td>${r.amountDiff ?? "－"}</td>
+        <td>${RECONCILIATION_STATUS_LABEL[r.status] || r.status}</td>
+        <td>${r.possibleReason ?? ""}</td>
       </tr>`
     )
     .join("");

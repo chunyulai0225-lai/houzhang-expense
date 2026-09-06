@@ -20,6 +20,7 @@
 import ExcelJS from "exceljs";
 import type { MonthlyImport, Person, StaffType, Weekday } from "@prisma/client";
 import { prisma } from "../prismaClient";
+import { assertMonthNotLocked, assertImportMonthNotLocked } from "./monthlyLockService";
 
 // ============================================================
 // 一、Excel 解析：欄位比對
@@ -388,6 +389,7 @@ export async function importSubstituteExcel(params: {
   importedBy?: string;
 }): Promise<ImportSubstituteExcelResult> {
   await prisma.semester.findUniqueOrThrow({ where: { id: params.semesterId } });
+  await assertMonthNotLocked(params.year, params.month);
 
   const { headers, rows } = await parseWorkbook(params.fileBuffer, params.sheetName);
 
@@ -601,17 +603,21 @@ export interface UnmatchedTeacherRef {
 
 export async function listUnmatchedTeacherReferences(monthlyImportId: string): Promise<UnmatchedTeacherRef[]> {
   const records = await prisma.substituteRecord.findMany({
-    where: { monthlyImportId, OR: [{ originalTeacherId: null }, { substituteTeacherId: null }] },
+    where: {
+      monthlyImportId,
+      entryType: "EXCEL_IMPORT", // 自費代課建立時就已經指定教師，不會出現在這個「未配對」清單
+      OR: [{ originalTeacherId: null }, { substituteTeacherId: null }],
+    },
     include: { rawRecord: true },
   });
 
   const results: UnmatchedTeacherRef[] = [];
   for (const r of records) {
-    if (!r.originalTeacherId && r.rawRecord.originalTeacherText) {
+    if (!r.originalTeacherId && r.rawRecord?.originalTeacherText) {
       const candidates = await prisma.person.findMany({ where: { name: r.rawRecord.originalTeacherText } });
       results.push({ recordId: r.id, field: "original", rawName: r.rawRecord.originalTeacherText, candidates });
     }
-    if (!r.substituteTeacherId && r.rawRecord.substituteTeacherText) {
+    if (!r.substituteTeacherId && r.rawRecord?.substituteTeacherText) {
       const candidates = await prisma.person.findMany({ where: { name: r.rawRecord.substituteTeacherText } });
       results.push({ recordId: r.id, field: "substitute", rawName: r.rawRecord.substituteTeacherText, candidates });
     }
@@ -627,6 +633,7 @@ export async function resolveTeacherReference(
   reason = "人工配對教師"
 ) {
   const record = await prisma.substituteRecord.findUniqueOrThrow({ where: { id: recordId } });
+  await assertImportMonthNotLocked(record.monthlyImportId);
   const fieldName = field === "original" ? "originalTeacherId" : "substituteTeacherId";
   const oldValue = field === "original" ? record.originalTeacherId : record.substituteTeacherId;
 

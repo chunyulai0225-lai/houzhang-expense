@@ -335,7 +335,7 @@ describe.skipIf(!REAL_SUBSTITUTE_FILE || !REAL_OVERTIME_FILE || !REAL_PROJECT_FI
         include: { rawRecord: true },
         orderBy: { date: "asc" },
       });
-      const teacherName = record.rawRecord.originalTeacherText!;
+      const teacherName = record.rawRecord!.originalTeacherText!;
 
       const created = await createPerson({ name: teacherName });
       if (created.status !== "CREATED") throw new Error("unreachable: 真實資料裡這個姓名應該還沒有對應的 Person");

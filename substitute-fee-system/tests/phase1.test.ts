@@ -49,11 +49,13 @@ describe("學年度／學期不寫死", () => {
 
 describe("費用規則以資料列表示，不寫死金額", () => {
   it("同一費用類型可以有多個版本，新版本不會覆蓋舊版本", async () => {
+    // 明確限定在種子資料的兩個學期，避免跟其他測試檔案（各自建立自己的
+    // FeeRule）平行執行時互相干擾——這裡本來就只是驗證種子資料本身的兩筆版本。
     const rules = await prisma.feeRule.findMany({
-      where: { feeType: "SUBSTITUTE_PERIOD" },
+      where: { feeType: "SUBSTITUTE_PERIOD", semester: { schoolYear: 115, term: { in: [1, 2] } } },
       orderBy: { effectiveDate: "asc" },
     });
-    expect(rules.length).toBeGreaterThanOrEqual(2);
+    expect(rules.length).toBe(2);
     expect(rules[0].amount.toNumber()).toBe(405);
     expect(rules[1].amount.toNumber()).toBe(420);
     // 兩筆都還在，代表調整費用不是用 UPDATE 覆蓋，而是新增資料列
@@ -123,20 +125,23 @@ describe("歷史資料不因人員目前狀態而消失", () => {
 });
 
 describe("每月鎖定狀態彼此獨立，歷史月份鎖定不影響其他月份", () => {
-  it("6月已鎖定、9月待確認可以同時存在", async () => {
-    const june = await prisma.monthlyLock.findUnique({ where: { year_month: { year: 2026, month: 6 } } });
+  // 注意：示範用的「已鎖定歷史月份」故意避開 2026年6月——那是全案用來驗證真實
+  // 「114學年2026.06月代課(公費).xlsx」的月份，MonthlyLock 用 (year, month) 當
+  // 唯一鍵、不分學期，如果種子資料把它鎖住，會連帶擋住所有真實資料回歸測試。
+  it("5月已鎖定、9月待確認可以同時存在", async () => {
+    const may = await prisma.monthlyLock.findUnique({ where: { year_month: { year: 2026, month: 5 } } });
     const sept = await prisma.monthlyLock.findUnique({ where: { year_month: { year: 2026, month: 9 } } });
-    expect(june?.status).toBe("LOCKED");
-    expect(june?.lockedBy).toBe("教學組長");
+    expect(may?.status).toBe("LOCKED");
+    expect(may?.lockedBy).toBe("教學組長");
     expect(sept?.status).toBe("PENDING_REVIEW");
     expect(sept?.lockedAt).toBeNull();
   });
 
   it("同一年月不可重複建立鎖定紀錄", async () => {
-    const existingJune = await prisma.monthlyLock.findUniqueOrThrow({ where: { year_month: { year: 2026, month: 6 } } });
+    const existingMay = await prisma.monthlyLock.findUniqueOrThrow({ where: { year_month: { year: 2026, month: 5 } } });
     await expect(
       prisma.monthlyLock.create({
-        data: { year: 2026, month: 6, status: "IMPORTED", semesterId: existingJune.semesterId },
+        data: { year: 2026, month: 5, status: "IMPORTED", semesterId: existingMay.semesterId },
       })
     ).rejects.toThrow();
   });

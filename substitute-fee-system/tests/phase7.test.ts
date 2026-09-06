@@ -399,9 +399,9 @@ describe("12. Raw 與標準化資料可追溯回同一 Import Batch", () => {
       where: { monthlyImportId: result.monthlyImport.id },
       include: { rawRecord: true },
     });
-    expect(record.rawRecord.monthlyImportId).toBe(result.monthlyImport.id);
+    expect(record.rawRecord!.monthlyImportId).toBe(result.monthlyImport.id);
     expect(record.monthlyImportId).toBe(result.monthlyImport.id);
-    expect(record.rawRecordId).toBe(record.rawRecord.id);
+    expect(record.rawRecordId).toBe(record.rawRecord!.id);
   });
 });
 

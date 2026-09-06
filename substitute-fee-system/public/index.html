@@ -27,6 +27,11 @@
     <button class="tab-btn" data-tab="classification">分類預覽</button>
     <button class="tab-btn" data-tab="feeRules">費用規則</button>
     <button class="tab-btn" data-tab="feeCalculation">費用計算</button>
+    <button class="tab-btn" data-tab="dashboard">月結首頁</button>
+    <button class="tab-btn" data-tab="pendingIssues">待處理</button>
+    <button class="tab-btn" data-tab="selfFunded">自費代課</button>
+    <button class="tab-btn" data-tab="chuna">給出納</button>
+    <button class="tab-btn" data-tab="reconciliation">對帳</button>
   </nav>
 
   <main>
@@ -197,7 +202,7 @@
         <thead>
           <tr>
             <th>日期</th><th>原教師</th><th>節次</th><th>班級</th><th>科目</th><th>代課教師</th>
-            <th>BD/非BD</th><th>自動分類</th><th>規則來源</th><th>專案</th><th>狀態</th><th>操作</th>
+            <th>BD/非BD</th><th>自動分類</th><th>規則來源</th><th>分類依據</th><th>專案</th><th>狀態</th><th>操作</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -233,6 +238,78 @@
             <th>代課教師</th><th>一般公費節數</th><th>一般公費金額</th>
             <th>超鐘點節數</th><th>超鐘點金額</th><th>專案節數</th><th>專案金額</th>
             <th>合計節數</th><th>合計金額</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- Implementation Batch：月結首頁 -->
+    <section id="tab-dashboard" class="tab-panel">
+      <div class="filters">
+        <select id="closePeriodSelect"></select>
+        <button id="btnRefreshDashboard">重新整理</button>
+      </div>
+      <div id="dashboardContent"></div>
+    </section>
+
+    <!-- Implementation Batch：待處理（統一問題清單） -->
+    <section id="tab-pendingIssues" class="tab-panel">
+      <div class="filters">
+        <select id="pendingPeriodSelect"></select>
+        <button id="btnRefreshPending">重新整理</button>
+      </div>
+      <table id="pendingIssuesTable">
+        <thead>
+          <tr>
+            <th>日期</th><th>原教師</th><th>代課教師</th><th>節次</th><th>班級</th><th>科目</th>
+            <th>問題類型</th><th>問題說明</th><th>目前狀態</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- Implementation Batch：自費代課 -->
+    <section id="tab-selfFunded" class="tab-panel">
+      <div class="filters">
+        <select id="selfFundedPeriodSelect"></select>
+        <button id="btnNewSelfFunded">＋ 新增自費代課</button>
+      </div>
+      <table id="selfFundedTable">
+        <thead>
+          <tr>
+            <th>日期</th><th>原教師</th><th>代課教師</th><th>節次</th><th>班級</th><th>科目</th>
+            <th>金額</th><th>備註</th><th>建立人</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- Implementation Batch：給出納 -->
+    <section id="tab-chuna" class="tab-panel">
+      <div class="filters">
+        <select id="chunaPeriodSelect"></select>
+        <button id="btnLoadChuna">產生給出納彙總</button>
+        <button id="btnExportChuna">下載 Excel</button>
+      </div>
+      <div id="chunaContent"></div>
+    </section>
+
+    <!-- Implementation Batch：對帳 -->
+    <section id="tab-reconciliation" class="tab-panel">
+      <div class="filters">
+        <select id="reconciliationPeriodSelect"></select>
+        <input id="reconciliationFile" type="file" accept=".xlsx" />
+        <button id="btnRunReconciliation">上傳並比對</button>
+      </div>
+      <div id="reconciliationSummary" class="import-result" hidden></div>
+      <table id="reconciliationTable">
+        <thead>
+          <tr>
+            <th>教師</th><th>系統節數</th><th>原始節數</th><th>系統金額</th><th>原始金額</th>
+            <th>差額</th><th>狀態</th><th>可能原因</th>
           </tr>
         </thead>
         <tbody></tbody>

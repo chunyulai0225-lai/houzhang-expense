@@ -69,3 +69,8 @@ tr.status-superseded { color: #999; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .modal-actions button.secondary { background: #999; }
 .error-text { color: #a83232; font-size: 12px; margin-top: 6px; }
+
+.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.dashboard-card { background: #f7fafc; border: 1px solid #d5e0ea; border-radius: 6px; padding: 14px; }
+.dashboard-card h3 { margin: 0 0 8px; font-size: 14px; }
+.dashboard-card p { margin: 4px 0; font-size: 13px; }

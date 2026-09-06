@@ -26,6 +26,7 @@
 import { FundingSource, FeeType, Prisma } from "@prisma/client";
 import { prisma } from "../prismaClient";
 import { getEffectiveFeeRule } from "./feeRuleService";
+import { assertMonthNotLocked } from "./monthlyLockService";
 
 // fundingSource → feeType 的對應集中管理在這裡，不要散落在各處。
 // PROJECT 目前刻意沿用 SUBSTITUTE_PERIOD（跟一般公費同一張費率表），
@@ -66,10 +67,11 @@ export async function calculateSubstituteRecordFee(recordId: string, changedBy?:
   const record = await prisma.substituteRecord.findUniqueOrThrow({
     where: { id: recordId },
     include: {
-      monthlyImport: { select: { semesterId: true } },
+      monthlyImport: { select: { semesterId: true, year: true, month: true } },
       rawRecord: { select: { substitutePeriodFeeText: true } },
     },
   });
+  await assertMonthNotLocked(record.monthlyImport.year, record.monthlyImport.month);
 
   const feeType = FUNDING_SOURCE_FEE_TYPE[record.fundingSource];
   if (!feeType) {
@@ -90,7 +92,7 @@ export async function calculateSubstituteRecordFee(recordId: string, changedBy?:
     onDate: record.date,
   });
   const referenceRate = rule?.amount ?? null;
-  const rawFee = parseRawFee(record.rawRecord.substitutePeriodFeeText);
+  const rawFee = parseRawFee(record.rawRecord?.substitutePeriodFeeText);
 
   let amount: Prisma.Decimal | null;
   let reason: string;

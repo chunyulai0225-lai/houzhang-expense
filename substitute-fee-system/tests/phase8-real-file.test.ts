@@ -209,7 +209,7 @@ describe.skipIf(!REAL_FILE)("Phase 8 真實 2026年6月代課資料分類回歸�
       include: { rawRecord: true },
       orderBy: { date: "asc" },
     });
-    const teacherName = record.rawRecord.originalTeacherText!;
+    const teacherName = record.rawRecord!.originalTeacherText!;
 
     let person = await prisma.person.findFirst({ where: { name: teacherName } });
     if (!person) {

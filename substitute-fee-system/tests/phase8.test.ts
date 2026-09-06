@@ -511,11 +511,11 @@ describe("18. Raw Data 不被分類流程修改", () => {
     const sem = await makeTestSemester(718);
     const teacher = await makeTeacher("測試Raw不變教師");
     const record = await makeRecord(sem.id, { originalTeacherId: teacher.id, date: "2026-09-01", weekday: "TUE" });
-    const rawBefore = await prisma.substituteRecordRaw.findUniqueOrThrow({ where: { id: record.rawRecordId } });
+    const rawBefore = await prisma.substituteRecordRaw.findUniqueOrThrow({ where: { id: record.rawRecordId! } });
 
     await classifySubstituteRecord(record.id);
 
-    const rawAfter = await prisma.substituteRecordRaw.findUniqueOrThrow({ where: { id: record.rawRecordId } });
+    const rawAfter = await prisma.substituteRecordRaw.findUniqueOrThrow({ where: { id: record.rawRecordId! } });
     expect(rawAfter).toEqual(rawBefore);
   });
 });

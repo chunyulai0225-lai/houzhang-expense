@@ -49,6 +49,13 @@ import {
 } from "./services/classificationService";
 import { createFeeRule, deactivateFeeRule, getFeeRuleHistory } from "./services/feeRuleService";
 import { calculateMonthlyImportFees, summarizeTeacherMonthlyFees } from "./services/feeCalculationService";
+import { getMonthlyLockStatus, lockMonth, unlockMonth, getBlockingIssues } from "./services/monthlyLockService";
+import { acknowledgeIssue, revokeAcknowledgement, listAcknowledgements } from "./services/issueAcknowledgementService";
+import { getMonthlyDashboard } from "./services/dashboardService";
+import { listPendingIssues } from "./services/pendingIssuesService";
+import { createSelfFundedRecord, updateSelfFundedRecord, deleteSelfFundedRecord, listSelfFundedRecords } from "./services/selfFundedService";
+import { getChunaSummary, generateChunaExcelBuffer } from "./services/chunaService";
+import { parseUploadedChunaWorkbook, reconcile } from "./services/reconciliationService";
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -485,6 +492,214 @@ app.post("/api/monthly-imports/:id/calculate-fees", async (req, res) => {
   try {
     const results = await calculateMonthlyImportFees(req.params.id, req.body?.changedBy || undefined);
     res.json(results);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// ---- Implementation Batch：月結首頁／待處理／問題確認／月結鎖定／自費代課／給出納／對帳 ----
+
+function requireSemesterYearMonth(req: express.Request, res: express.Response): { semesterId: string; year: number; month: number } | null {
+  const { semesterId, year, month } = req.query;
+  if (!semesterId || !year || !month) {
+    res.status(400).json({ error: "semesterId、year、month 為必填" });
+    return null;
+  }
+  return { semesterId: String(semesterId), year: Number(year), month: Number(month) };
+}
+
+app.get("/api/monthly-dashboard", async (req, res) => {
+  try {
+    const params = requireSemesterYearMonth(req, res);
+    if (!params) return;
+    const dashboard = await getMonthlyDashboard(params.semesterId, params.year, params.month);
+    res.json(dashboard);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.get("/api/pending-issues", async (req, res) => {
+  try {
+    const params = requireSemesterYearMonth(req, res);
+    if (!params) return;
+    const issues = await listPendingIssues(params.semesterId, params.year, params.month);
+    res.json(issues);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/issue-acknowledgements", async (req, res) => {
+  try {
+    const { semesterId, year, month, targetTable, targetId, reason, acknowledgedBy } = req.body;
+    const ack = await acknowledgeIssue({ semesterId, year: Number(year), month: Number(month), targetTable, targetId, reason, acknowledgedBy });
+    res.json(ack);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/issue-acknowledgements/revoke", async (req, res) => {
+  try {
+    const { targetTable, targetId, changedBy } = req.body;
+    await revokeAcknowledgement(targetTable, targetId, changedBy || undefined);
+    res.json({ ok: true });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.get("/api/monthly-lock", async (req, res) => {
+  try {
+    const params = requireSemesterYearMonth(req, res);
+    if (!params) return;
+    const status = await getMonthlyLockStatus(params.semesterId, params.year, params.month);
+    const blocking = await getBlockingIssues(params.semesterId, params.year, params.month);
+    res.json({ ...status, blocking });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/monthly-lock/lock", async (req, res) => {
+  try {
+    const { semesterId, year, month, lockedBy } = req.body;
+    const status = await lockMonth(semesterId, Number(year), Number(month), lockedBy);
+    res.json(status);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/monthly-lock/unlock", async (req, res) => {
+  try {
+    const { semesterId, year, month, unlockedBy, reason } = req.body;
+    const status = await unlockMonth(semesterId, Number(year), Number(month), unlockedBy, reason);
+    res.json(status);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.get("/api/self-funded", async (req, res) => {
+  try {
+    const params = requireSemesterYearMonth(req, res);
+    if (!params) return;
+    const records = await listSelfFundedRecords(params.semesterId, params.year, params.month);
+    res.json(records);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/self-funded", async (req, res) => {
+  try {
+    const body = req.body;
+    const record = await createSelfFundedRecord({
+      semesterId: body.semesterId,
+      year: Number(body.year),
+      month: Number(body.month),
+      date: new Date(body.date),
+      originalTeacherId: body.originalTeacherId || undefined,
+      substituteTeacherId: body.substituteTeacherId,
+      periodCode: body.periodCode || undefined,
+      className: body.className || undefined,
+      subject: body.subject || undefined,
+      amount: body.amount,
+      unitPrice: body.unitPrice || undefined,
+      note: body.note || undefined,
+      createdBy: body.createdBy,
+    });
+    res.json(record);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.patch("/api/self-funded/:id", async (req, res) => {
+  try {
+    const body = req.body;
+    const record = await updateSelfFundedRecord(req.params.id, {
+      date: body.date ? new Date(body.date) : undefined,
+      originalTeacherId: body.originalTeacherId,
+      substituteTeacherId: body.substituteTeacherId,
+      periodCode: body.periodCode,
+      className: body.className,
+      subject: body.subject,
+      amount: body.amount,
+      unitPrice: body.unitPrice,
+      note: body.note,
+      updatedBy: body.updatedBy,
+    });
+    res.json(record);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.delete("/api/self-funded/:id", async (req, res) => {
+  try {
+    const { deletedBy, reason } = req.body;
+    await deleteSelfFundedRecord(req.params.id, deletedBy, reason);
+    res.json({ ok: true });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.get("/api/chuna-summary", async (req, res) => {
+  try {
+    const idsParam = req.query.ids;
+    const ids = typeof idsParam === "string" ? idsParam.split(",").filter(Boolean) : [];
+    if (ids.length === 0) {
+      res.status(400).json({ error: "請提供 ids（以逗號分隔的 monthlyImportId 清單）" });
+      return;
+    }
+    const summary = await getChunaSummary(ids);
+    res.json(summary);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.get("/api/chuna-export", async (req, res) => {
+  try {
+    const idsParam = req.query.ids;
+    const ids = typeof idsParam === "string" ? idsParam.split(",").filter(Boolean) : [];
+    const year = Number(req.query.year);
+    const month = Number(req.query.month);
+    if (ids.length === 0 || !year || !month) {
+      res.status(400).json({ error: "請提供 ids、year、month" });
+      return;
+    }
+    const buffer = await generateChunaExcelBuffer(ids, year, month);
+    // 檔名含中文，HTTP header 只能放 ASCII，中文檔名要用 RFC 5987 的 filename*= 語法，
+    // 另外保留一個 ASCII fallback 檔名給不支援 filename* 的舊瀏覽器。
+    const encodedFileName = encodeURIComponent(`${year}-${month}-給出納.xlsx`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${year}-${month}-chuna.xlsx"; filename*=UTF-8''${encodedFileName}`);
+    res.send(buffer);
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
+app.post("/api/reconciliation", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: "請上傳原始給出納 Excel 檔案" });
+      return;
+    }
+    const idsParam = req.body.ids;
+    const ids = typeof idsParam === "string" ? idsParam.split(",").filter(Boolean) : [];
+    if (ids.length === 0) {
+      res.status(400).json({ error: "請提供 ids（以逗號分隔的 monthlyImportId 清單）" });
+      return;
+    }
+    const uploadedRows = await parseUploadedChunaWorkbook(req.file.buffer);
+    const result = await reconcile(ids, uploadedRows);
+    res.json(result);
   } catch (err) {
     handleError(res, err);
   }

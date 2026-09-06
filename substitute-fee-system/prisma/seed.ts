@@ -229,14 +229,17 @@ async function main() {
     },
   });
 
-  // ---- 每月鎖定：6月已鎖定（歷史月份），9月待確認 ----
+  // ---- 每月鎖定：5月已鎖定（歷史月份），9月待確認 ----
+  // 注意：不要用 2026年6月當示範鎖定月份——這是專案全程用來驗證真實資料
+  // 的月份（114學年2026.06月代課(公費).xlsx），MonthlyLock 用 (year, month)
+  // 當唯一鍵、不分學期，鎖住 2026-06 會連帶擋住所有用真實檔案的回歸測試。
   await prisma.monthlyLock.create({
     data: {
       semesterId: sem115_1.id,
       year: 2026,
-      month: 6,
+      month: 5,
       status: "LOCKED",
-      lockedAt: new Date("2026-07-05"),
+      lockedAt: new Date("2026-06-05"),
       lockedBy: "教學組長",
     },
   });
