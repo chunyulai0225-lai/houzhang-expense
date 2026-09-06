@@ -1,0 +1,29 @@
+{
+  "name": "substitute-fee-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "后庄國小代課費自動化管理系統 - Phase 1: 資料庫與學年度/學期架構",
+  "scripts": {
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "seed": "ts-node prisma/seed.ts",
+    "test": "vitest run",
+    "server": "ts-node src/server.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.11",
+    "@types/node": "^22.5.5",
+    "playwright": "^1.47.0",
+    "prisma": "^5.20.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}
