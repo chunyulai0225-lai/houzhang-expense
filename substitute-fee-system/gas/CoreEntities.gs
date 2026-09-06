@@ -210,23 +210,33 @@ function api_listPeriodSlots() {
 // 欄位裡沒有 projectId，本來就不會直接參照專案；如果某筆代課紀錄的費用計算被記錄進
 // FeeCalculations，那筆代課紀錄本身在 SubstituteRecords 裡的 projectId 已經會被這裡
 // 的 SubstituteRecords 檢查涵蓋到，不需要另外重複檢查那兩張稽核表。
+//
+// 效能筆記（判斷結果完全不變，只是不要為了列出 N 個專案就重複掃 3 張表 N 次）：
+// api_listProjects() 原本對每一列專案各自呼叫一次 isProjectInUse()，等於掃了
+// WeeklyRules／DateRules／SubstituteRecords 各 N 次（N＝專案數）；SubstituteRecords
+// 隨著每個月匯入只會越來越大，這個 N 次重複掃描是「載入專案清單」感覺變慢的主要
+// 原因之一。getUsedProjectIdSet() 只掃這三張表各一次、建一份「有被引用的 projectId」
+// 對照表，之後不管檢查幾個專案都是 O(1) 查表，跟原本「一個一個查」得到的結果完全一樣。
+function getUsedProjectIdSet() {
+  var used = {};
+  readRows("WeeklyRules").forEach(function (r) { if (r.projectId) used[r.projectId] = true; });
+  readRows("DateRules").forEach(function (r) { if (r.projectId) used[r.projectId] = true; });
+  readRows("SubstituteRecords").forEach(function (r) { if (r.projectId) used[r.projectId] = true; });
+  return used;
+}
+
 function isProjectInUse(projectId) {
-  var inWeeklyRules = !!findOne("WeeklyRules", function (r) { return r.projectId === projectId; });
-  if (inWeeklyRules) return true;
-  var inDateRules = !!findOne("DateRules", function (r) { return r.projectId === projectId; });
-  if (inDateRules) return true;
-  var inSubstituteRecords = !!findOne("SubstituteRecords", function (r) { return r.projectId === projectId; });
-  if (inSubstituteRecords) return true;
-  return false;
+  return !!getUsedProjectIdSet()[projectId];
 }
 
 function api_listProjects(payload) {
   requireField(payload, "semesterId", "學期");
   var rows = readRows("Projects").filter(function (r) { return r.semesterId === payload.semesterId; }).map(stripRow);
+  var usedProjectIds = getUsedProjectIdSet(); // 掃一次，下面每一列查表就好，不要各自再掃三張表
   return rows.map(function (r) {
     return {
       id: r.id, semesterId: r.semesterId, name: r.name, isActive: toBool(r.isActive), note: r.note,
-      createdAt: r.createdAt, updatedAt: r.updatedAt, isInUse: isProjectInUse(r.id),
+      createdAt: r.createdAt, updatedAt: r.updatedAt, isInUse: !!usedProjectIds[r.id],
     };
   });
 }

@@ -23,20 +23,39 @@ const GAS_FILES = [
   "Router.gs",
 ];
 
+// 效能量測用的計數器：記錄這次執行期間實際呼叫了幾次 SpreadsheetApp.openById()／
+// getSheetByName()／getRange().getValues()／setValues()——這幾個在真正的 Google
+// Apps Script 環境裡都是有實際網路延遲的呼叫，呼叫次數的減少直接對應真實延遲的
+// 減少。tests/gas-performance.test.ts 用這個驗證「同一個 action 不會重複開試算表
+// /重複找同一個分頁/重複讀表頭」，其餘測試檔案不理會這個欄位也完全不受影響。
+export interface PerfCounters {
+  openByIdCalls: number;
+  getSheetByNameCalls: number;
+  getValuesCalls: number;
+  setValuesCalls: number;
+}
+
+function freshCounters(): PerfCounters {
+  return { openByIdCalls: 0, getSheetByNameCalls: 0, getValuesCalls: 0, setValuesCalls: 0 };
+}
+
 class FakeRange {
   sheet: FakeSheet;
   row: number;
   col: number;
   numRows: number;
   numCols: number;
-  constructor(sheet: FakeSheet, row: number, col: number, numRows: number, numCols: number) {
+  counters: PerfCounters;
+  constructor(sheet: FakeSheet, row: number, col: number, numRows: number, numCols: number, counters: PerfCounters) {
     this.sheet = sheet;
     this.row = row;
     this.col = col;
     this.numRows = numRows;
     this.numCols = numCols;
+    this.counters = counters;
   }
   getValues() {
+    this.counters.getValuesCalls++;
     const out: any[][] = [];
     for (let r = 0; r < this.numRows; r++) {
       const rowArr: any[] = [];
@@ -51,6 +70,7 @@ class FakeRange {
     return out;
   }
   setValues(values: any[][]) {
+    this.counters.setValuesCalls++;
     for (let r = 0; r < values.length; r++) {
       const actualRow = this.row - 1 + r;
       while (this.sheet.data.length <= actualRow) this.sheet.data.push([]);
@@ -69,13 +89,15 @@ class FakeSheet {
   name: string;
   data: any[][];
   frozenRows: number;
-  constructor(name: string) {
+  counters: PerfCounters;
+  constructor(name: string, counters: PerfCounters) {
     this.name = name;
     this.data = [];
     this.frozenRows = 0;
+    this.counters = counters;
   }
   getRange(row: number, col: number, numRows?: number, numCols?: number) {
-    return new FakeRange(this, row, col, numRows || 1, numCols || 1);
+    return new FakeRange(this, row, col, numRows || 1, numCols || 1, this.counters);
   }
   getLastRow() {
     for (let r = this.data.length - 1; r >= 0; r--) {
@@ -109,11 +131,16 @@ class FakeSheet {
 
 class FakeSpreadsheet {
   sheets: Record<string, FakeSheet> = {};
+  counters: PerfCounters;
+  constructor(counters: PerfCounters) {
+    this.counters = counters;
+  }
   getSheetByName(name: string) {
+    this.counters.getSheetByNameCalls++;
     return this.sheets[name] || null;
   }
   insertSheet(name: string) {
-    const s = new FakeSheet(name);
+    const s = new FakeSheet(name, this.counters);
     this.sheets[name] = s;
     return s;
   }
@@ -143,13 +170,17 @@ function formatDateInTimeZone(date: Date, timeZone: string, pattern: string): st
 }
 
 export function createGasSandbox() {
-  const fakeSpreadsheet = new FakeSpreadsheet();
+  const counters = freshCounters();
+  const fakeSpreadsheet = new FakeSpreadsheet(counters);
   const sandbox: any = {
     console,
     SpreadsheetApp: {
-      openById: () => fakeSpreadsheet,
+      openById: () => {
+        counters.openByIdCalls++;
+        return fakeSpreadsheet;
+      },
       create: (name: string) => {
-        const ss = new FakeSpreadsheet();
+        const ss = new FakeSpreadsheet(counters);
         ss.insertSheet("Sheet1");
         (ss as any).name = name;
         return ss;
@@ -178,7 +209,24 @@ export function createGasSandbox() {
   const src = GAS_FILES.map((f) => fs.readFileSync(path.join(GAS_DIR, f), "utf8")).join("\n;\n");
   vm.runInContext(src, sandbox, { filename: "gas-bundle.js" });
   sandbox.setupSheets();
+  // setupSheets() 本身會呼叫好幾次 openById/getSheetByName，跟後面實際要測的單一
+  // action 呼叫次數無關，這裡歸零讓量測從「setupSheets 已經跑完」的狀態開始算。
+  counters.openByIdCalls = 0;
+  counters.getSheetByNameCalls = 0;
+  counters.getValuesCalls = 0;
+  counters.setValuesCalls = 0;
+  sandbox.__perfCounters = counters;
   return sandbox;
+}
+
+// 把計數器歸零，方便在同一個 sandbox 裡先做一些「準備資料」的呼叫（例如先建立一個
+// 專案），歸零之後再單獨量測「接下來這一個 action」實際呼叫了幾次 Sheets API。
+export function resetPerfCounters(sandbox: any) {
+  const c: PerfCounters = sandbox.__perfCounters;
+  c.openByIdCalls = 0;
+  c.getSheetByNameCalls = 0;
+  c.getValuesCalls = 0;
+  c.setValuesCalls = 0;
 }
 
 // 模擬真實生產環境目前已經有的資料：115學年度第1學期，ACTIVE，isCurrent=true，

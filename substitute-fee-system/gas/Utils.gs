@@ -12,8 +12,18 @@ var SPREADSHEET_ID = "1DNbKCwgdSHKvSNCCqvrqUUchOTITdC3e1EWdvLgRY-k";
 // 一個定義，沒有重複；如果你手動貼到 Apps Script 專案時漏了某個檔案，導致執行期出現
 // 「getSpreadsheet is not defined」，代表 Utils.gs 或某個檔案沒有貼到最新內容，
 // 請確認 10 個 .gs 檔案都已經是最新版本。）
+//
+// 效能筆記：openById() 是有實際延遲的遠端呼叫，一個 action 裡（例如新增一筆學期）
+// 光是 assertSemesterYearTermUnique → appendRow → writeChangeLog 就會呼叫好幾次
+// getSpreadsheet()。這裡快取成同一次執行只真的 openById 一次——每次 doGet/doPost
+// 都是全新的全域執行環境，這個快取不會跨請求殘留舊資料，效果等同「這次請求開始時
+// 才第一次連線，之後同一次請求內都重複使用同一個連線」。
+var _cachedSpreadsheet = null;
 function getSpreadsheet() {
-  return SpreadsheetApp.openById(SPREADSHEET_ID);
+  if (!_cachedSpreadsheet) {
+    _cachedSpreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  }
+  return _cachedSpreadsheet;
 }
 
 function newId() {
