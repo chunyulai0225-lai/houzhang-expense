@@ -6,6 +6,7 @@
 import ExcelJS from "exceljs";
 import { prisma } from "../prismaClient";
 import { summarizeTeacherMonthlyFees, TeacherMonthlyFeeSummaryRow } from "./feeCalculationService";
+import { SELF_FUNDED_BATCH_FILE_NAME } from "./selfFundedService";
 
 export interface ChunaRow extends TeacherMonthlyFeeSummaryRow {
   payrollCode: string | null;
@@ -29,10 +30,15 @@ async function enrichWithPayrollCode(rows: TeacherMonthlyFeeSummaryRow[]): Promi
 }
 
 export async function getChunaSummary(monthlyImportIds: string[]): Promise<ChunaSummary> {
-  const imports = await prisma.monthlyImport.findMany({ where: { id: { in: monthlyImportIds } } });
-  const bdIds = imports.filter((i) => i.sourceStaffType === "BD").map((i) => i.id);
-  const nonBdIds = imports.filter((i) => i.sourceStaffType === "NON_BD").map((i) => i.id);
-  const unknownIds = imports.filter((i) => i.sourceStaffType === "UNKNOWN").map((i) => i.id);
+  // 自費代課的虛擬容器批次不算「給出納」的一部分——給出納是公費核銷用的名冊，
+  // 自費代課是學校/單位自行吸收的支出，兩者不應該混在同一張表或同一個總額裡
+  // （跟 dashboardService 排除自費代課批次算公費總額是同一個原則）。
+  const excelImports = await prisma.monthlyImport.findMany({
+    where: { id: { in: monthlyImportIds }, fileName: { not: SELF_FUNDED_BATCH_FILE_NAME } },
+  });
+  const bdIds = excelImports.filter((i) => i.sourceStaffType === "BD").map((i) => i.id);
+  const nonBdIds = excelImports.filter((i) => i.sourceStaffType === "NON_BD").map((i) => i.id);
+  const unknownIds = excelImports.filter((i) => i.sourceStaffType === "UNKNOWN").map((i) => i.id);
 
   const [bd, nonBd, unknown] = await Promise.all([
     bdIds.length > 0 ? summarizeTeacherMonthlyFees(bdIds) : Promise.resolve([]),

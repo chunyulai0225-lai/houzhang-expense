@@ -14,7 +14,7 @@ import type { SubstituteRecord, Weekday } from "@prisma/client";
 import { prisma } from "../prismaClient";
 import { assertMonthNotLocked, assertRecordMonthNotLocked } from "./monthlyLockService";
 
-const SELF_FUNDED_BATCH_FILE_NAME = "（自費代課手動登錄）";
+export const SELF_FUNDED_BATCH_FILE_NAME = "（自費代課手動登錄）";
 
 const WEEKDAY_BY_JS_INDEX: Weekday[] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 function weekdayOf(date: Date): Weekday {

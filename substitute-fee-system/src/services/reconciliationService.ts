@@ -122,10 +122,28 @@ async function guessPossibleReason(name: string, monthlyImportIds: string[], dif
 export async function reconcile(monthlyImportIds: string[], uploadedRows: UploadedChunaRow[]): Promise<ReconciliationResult> {
   const summary = await getChunaSummary(monthlyImportIds);
   const allSystemRows: ChunaRow[] = [...summary.bd, ...summary.nonBd, ...summary.unknown];
+  // 同一個姓名可能同時出現在 BD／非BD／未標示來源這幾個分組（例如同一位教師這個月
+  // 同時有編制內跟編制外的代課紀錄）——這裡要把節數／金額加總起來，絕對不能讓後面
+  // 的分組直接蓋掉前面的，否則系統總額會悄悄少算，對帳就失去意義了。
   const systemByName = new Map<string, ChunaRow>();
   for (const r of allSystemRows) {
     const key = r.substituteTeacherName.replace("（未配對）", "").trim();
-    systemByName.set(key, r);
+    const existing = systemByName.get(key);
+    if (existing) {
+      systemByName.set(key, {
+        ...existing,
+        generalCount: existing.generalCount + r.generalCount,
+        generalAmount: (Number(existing.generalAmount) + Number(r.generalAmount)).toString(),
+        overtimeCount: existing.overtimeCount + r.overtimeCount,
+        overtimeAmount: (Number(existing.overtimeAmount) + Number(r.overtimeAmount)).toString(),
+        projectCount: existing.projectCount + r.projectCount,
+        projectAmount: (Number(existing.projectAmount) + Number(r.projectAmount)).toString(),
+        totalCount: existing.totalCount + r.totalCount,
+        totalAmount: (Number(existing.totalAmount) + Number(r.totalAmount)).toString(),
+      });
+    } else {
+      systemByName.set(key, r);
+    }
   }
   const uploadedByName = new Map(uploadedRows.map((r) => [r.name.trim(), r]));
 
