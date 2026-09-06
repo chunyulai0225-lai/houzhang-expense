@@ -6,6 +6,16 @@
  */
 var SPREADSHEET_ID = "1DNbKCwgdSHKvSNCCqvrqUUchOTITdC3e1EWdvLgRY-k";
 
+// 統一的試算表存取入口，跟它唯一依賴的 SPREADSHEET_ID 放在同一個檔案——Utils.gs 是
+// 每個其他檔案（SheetsDB.gs／Setup.gs／CoreEntities.gs…）都會用到的最基礎檔案，
+// 放這裡最不容易在只重貼部分檔案時被漏掉。（這個函式原本放在 Setup.gs，只有這裡
+// 一個定義，沒有重複；如果你手動貼到 Apps Script 專案時漏了某個檔案，導致執行期出現
+// 「getSpreadsheet is not defined」，代表 Utils.gs 或某個檔案沒有貼到最新內容，
+// 請確認 10 個 .gs 檔案都已經是最新版本。）
+function getSpreadsheet() {
+  return SpreadsheetApp.openById(SPREADSHEET_ID);
+}
+
 function newId() {
   return Utilities.getUuid();
 }

@@ -149,9 +149,8 @@ function setupSheets() {
   Logger.log("setupSheets 完成，共 " + Object.keys(SHEET_SCHEMAS).length + " 個分頁。");
 }
 
-function getSpreadsheet() {
-  return SpreadsheetApp.openById(SPREADSHEET_ID);
-}
+// getSpreadsheet() 現在定義在 Utils.gs（跟它依賴的 SPREADSHEET_ID 放一起），
+// 這裡不重複定義。
 
 function seedPeriodSlotsIfEmpty() {
   var rows = readRows("PeriodSlots");
