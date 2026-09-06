@@ -28,6 +28,7 @@
 
         <div class="nav-group-label" id="settingsToggle">⚙️ 基本設定 <span class="chev">▾</span></div>
         <div class="nav-subgroup" id="settingsSubgroup">
+          <button class="nav-btn tab-btn sub" data-tab="semesters">學期管理</button>
           <button class="nav-btn tab-btn sub" data-tab="feeRules">費用規則</button>
           <button class="nav-btn tab-btn sub" data-tab="projects">專案</button>
           <button class="nav-btn tab-btn sub" data-tab="weekly">每週固定規則</button>
@@ -278,6 +279,25 @@
           </div>
           <div id="chunaSummaryStrip" class="summary-strip" hidden></div>
           <div id="chunaContent"></div>
+        </section>
+
+        <!-- 基本設定：學期管理 -->
+        <section id="tab-semesters" class="tab-panel">
+          <div class="filters">
+            <button id="btnNewSemester">＋ 新增學期</button>
+          </div>
+          <p class="hint">學期只能停用，不能刪除——歷史資料要一直查得到。同一時間系統只會有一個「目前使用中」的學期，按「設為目前使用」會自動把其他學期取消目前使用中狀態。</p>
+          <div class="panel">
+            <table id="semesterTable">
+              <thead>
+                <tr>
+                  <th>學年度</th><th>學期</th><th>狀態</th><th>開始日期</th><th>結束日期</th>
+                  <th>目前使用中</th><th>加班比對模式</th><th>備註</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </section>
 
         <!-- 基本設定：費用規則 -->
