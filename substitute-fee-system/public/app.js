@@ -33,6 +33,28 @@ const RECONCILIATION_STATUS_LABEL = {
   UNCERTAIN: "待確認",
 };
 
+const PAGE_TITLES = {
+  dashboard: "🏠 月結首頁",
+  importExcel: "📥 公費代課匯入",
+  classification: "👥 分類預覽",
+  pendingIssues: "⚠️ 待處理",
+  feeCalculation: "💰 費用計算",
+  selfFunded: "💵 自費代課",
+  reconciliation: "📊 對帳",
+  chuna: "🧾 給出納",
+  feeRules: "⚙️ 基本設定／費用規則",
+  projects: "⚙️ 基本設定／專案",
+  weekly: "⚙️ 基本設定／每週固定規則",
+  dateRules: "⚙️ 基本設定／單日例外",
+  calendar: "⚙️ 基本設定／學校上課日曆",
+};
+
+// 統一的狀態徽章，取代裸露的英文 enum（例如 TEACHER_UNMATCHED、CONFLICT），
+// 讓行政人員一眼看懂目前狀態，不用先學系統內部的術語。
+function badge(type, text) {
+  return `<span class="badge badge-${type}">${text}</span>`;
+}
+
 // Implementation Batch：月結首頁／待處理／自費代課／給出納／對帳共用同一組「學期＋年月」，
 // 這五個分頁本質上都是在看／處理同一個月結期間的狀態，所以用同一個 state 欄位，
 // 在任一分頁切換年月時，其餘分頁的選單也一併同步。
@@ -53,6 +75,8 @@ const state = {
   feeCalcPeriod: null, // { year, month }
   closePeriod: null, // { year, month }，月結首頁／待處理／自費代課／給出納／對帳共用
   chunaBatchIds: [],
+  pendingFilter: "ALL",
+  pendingIssuesCache: [],
 };
 
 const FEE_TYPE_LABEL = {
@@ -97,6 +121,14 @@ async function init() {
       if (loader) loader();
     })
   );
+
+  qs("#settingsToggle").addEventListener("click", () => {
+    qs("#settingsToggle").classList.toggle("collapsed");
+    qs("#settingsSubgroup").classList.toggle("collapsed");
+  });
+  qs("#menuToggle").addEventListener("click", () => {
+    qs("#sidebar").classList.toggle("open");
+  });
   qsa(".subtab-btn").forEach((btn) =>
     btn.addEventListener("click", () => {
       state.ruleType = btn.dataset.ruletype;
@@ -107,8 +139,17 @@ async function init() {
 
   qs("#semesterSelect").addEventListener("change", async (e) => {
     state.semesterId = e.target.value;
+    updateSemesterBadge();
     await loadForSemester();
   });
+
+  qsa("#pendingFilterTabs .subtab-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      state.pendingFilter = btn.dataset.filter;
+      qsa("#pendingFilterTabs .subtab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      renderPendingIssues();
+    })
+  );
 
   qs("#filterTeacher").addEventListener("input", debounce(loadWeeklyRules, 300));
   qs("#filterWeekday").addEventListener("change", loadWeeklyRules);
@@ -181,7 +222,7 @@ async function init() {
   });
   qs("#btnRunFeeCalculation").addEventListener("click", runFeeCalculation);
 
-  qs("#btnRefreshDashboard").addEventListener("click", loadDashboard);
+  qs("#btnRefreshDashboard").addEventListener("click", loadDashboardAndHistory);
   qs("#btnRefreshPending").addEventListener("click", loadPendingIssues);
   qs("#btnNewSelfFunded").addEventListener("click", () => openSelfFundedForm());
   qs("#btnLoadChuna").addEventListener("click", loadChuna);
@@ -199,10 +240,20 @@ async function init() {
     select.value = current.id;
     state.semesterId = current.id;
   }
+  updateSemesterBadge();
 
   state.periodSlots = await api("/api/period-slots");
 
   await loadForSemester();
+}
+
+// 側邊欄上方的學期／年月標示：一進系統就先讓使用者確認「我現在在看哪個學期、現在是幾月」。
+function updateSemesterBadge() {
+  const s = getCurrentSemester();
+  const el = qs("#semesterBadge");
+  const now = new Date();
+  const todayLabel = `${now.getFullYear()}年${now.getMonth() + 1}月`;
+  el.textContent = s ? `${s.schoolYear}學年度第${s.term}學期｜${todayLabel}` : `尚未選擇學期｜${todayLabel}`;
 }
 
 function debounce(fn, ms) {
@@ -216,10 +267,18 @@ function debounce(fn, ms) {
 function switchTab(tab) {
   qsa(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   qsa(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${tab}`));
+  const title = PAGE_TITLES[tab];
+  if (title) qs("#pageTitle").textContent = title;
+  qs("#sidebar").classList.remove("open"); // 手機版：切換分頁後自動收起側邊欄選單
+}
+
+function loadDashboardAndHistory() {
+  loadDashboard();
+  loadHistoryTable();
 }
 
 const TAB_LOADERS = {
-  dashboard: loadDashboard,
+  dashboard: loadDashboardAndHistory,
   pendingIssues: loadPendingIssues,
   selfFunded: loadSelfFunded,
 };
@@ -237,6 +296,9 @@ async function loadForSemester() {
   await loadFeeRules();
   setupFeeCalcPeriodOptions();
   setupClosePeriodOptions();
+  // 月結首頁是進站後第一眼看到的畫面，資料要在初始載入時就準備好，不能等使用者手動點分頁。
+  await loadDashboard();
+  await loadHistoryTable();
 }
 
 // ---------- 每週固定規則 ----------
@@ -901,7 +963,7 @@ async function loadImportBatches() {
         <td>${b.totalCount}</td>
         <td>${b.successCount}</td>
         <td>${b.errorCount}</td>
-        <td>${b.status === "ACTIVE" ? "有效" : "已取代"}</td>
+        <td>${b.status === "ACTIVE" ? badge("ok", "🟢 生效中") : badge("idle", "⚪ 已取代")}</td>
         <td><button data-id="${b.id}" data-action="view">查看</button></td>
       </tr>`
     )
@@ -966,10 +1028,10 @@ async function loadClassificationPreview() {
   tbody.innerHTML = records
     .map((r) => {
       let status;
-      if (r.isManuallyModified) status = "✅ 已人工覆寫";
-      else if (r.classificationMethod === "CONFLICT") status = "⚠️ 規則衝突，需確認";
-      else if (r.classificationMethod === "TEACHER_UNMATCHED") status = "⚠️ 原教師未配對";
-      else status = "系統判斷";
+      if (r.isManuallyModified) status = badge("ok", "✅ 已人工覆寫");
+      else if (r.classificationMethod === "CONFLICT") status = badge("blocked", "🔴 分類規則衝突");
+      else if (r.classificationMethod === "TEACHER_UNMATCHED") status = badge("blocked", "🔴 教師尚未配對");
+      else status = badge("idle", "系統判斷");
 
       return `
         <tr class="${r.classificationMethod === "CONFLICT" || r.classificationMethod === "TEACHER_UNMATCHED" ? "conflict-row" : ""}" data-id="${r.id}">
@@ -1192,6 +1254,30 @@ async function runFeeCalculation() {
   const summary = await api(`/api/monthly-imports/fee-summary?ids=${ids}`);
   msgEl.textContent = `已計算 ${targetBatches.length} 個批次，共 ${summary.length} 位代課教師有金額紀錄。`;
 
+  const totalAmount = summary.reduce((s, r) => s + Number(r.totalAmount), 0);
+  const totalCount = summary.reduce((s, r) => s + r.totalCount, 0);
+  const generalAmount = summary.reduce((s, r) => s + Number(r.generalAmount), 0);
+  const overtimeAmount = summary.reduce((s, r) => s + Number(r.overtimeAmount), 0);
+  const projectAmount = summary.reduce((s, r) => s + Number(r.projectAmount), 0);
+  let selfFundedTotal = 0;
+  try {
+    const selfFundedRecords = await api(`/api/self-funded?semesterId=${state.semesterId}&year=${state.feeCalcPeriod.year}&month=${state.feeCalcPeriod.month}`);
+    selfFundedTotal = selfFundedRecords.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+  } catch (err) {
+    // 自費代課資料讀取失敗不影響公費費用計算本身，安靜略過即可
+  }
+
+  const stripEl = qs("#feeCalcSummaryStrip");
+  stripEl.hidden = false;
+  stripEl.innerHTML = `
+    <div class="summary-tile st-accent"><div class="st-label">本月公費總額</div><div class="st-value">$${totalAmount}</div></div>
+    <div class="summary-tile"><div class="st-label">代課教師人數</div><div class="st-value">${summary.length}</div></div>
+    <div class="summary-tile"><div class="st-label">總節數</div><div class="st-value">${totalCount}</div></div>
+    <div class="summary-tile"><div class="st-label">一般公費</div><div class="st-value">$${generalAmount}</div></div>
+    <div class="summary-tile"><div class="st-label">超鐘點</div><div class="st-value">$${overtimeAmount}</div></div>
+    <div class="summary-tile"><div class="st-label">專案</div><div class="st-value">$${projectAmount}</div></div>
+    <div class="summary-tile st-ok"><div class="st-label">自費代課（不列入公費總額）</div><div class="st-value">$${selfFundedTotal}</div></div>`;
+
   const tbody = qs("#feeSummaryTable tbody");
   tbody.innerHTML = summary
     .map(
@@ -1256,43 +1342,99 @@ async function loadDashboard() {
   renderDashboard(dashboard);
 }
 
+// 根據目前狀態，直接告訴使用者「現在應該做什麼」——不要只丟一堆數字讓人自己判斷。
+function computeNextStep(d) {
+  if (!d.import.hasActiveBatch && !d.selfFunded.exists) {
+    return { level: "todo", icon: "📥", title: "尚未匯入公費代課資料", sub: "請先匯入本月 Excel（編制內／編制外各匯入一次）", actionTab: "importExcel", actionLabel: "前往匯入" };
+  }
+  if (d.lock.isLocked) {
+    return { level: "done", icon: "🔒", title: "本月已完成並鎖定", sub: `鎖定人：${d.lock.lockedBy}｜時間：${new Date(d.lock.lockedAt).toLocaleString("zh-TW")}`, actionTab: null };
+  }
+  const classifiedCount = d.classification.general + d.classification.overtime + d.classification.project + d.classification.conflict + d.classification.teacherUnmatched;
+  if (d.import.hasActiveBatch && classifiedCount < d.import.successCount) {
+    return { level: "todo", icon: "👥", title: "公費資料已匯入", sub: "下一步：處理教師配對／執行自動分類", actionTab: "classification", actionLabel: "前往分類預覽" };
+  }
+  if (d.issues.blocking.total > 0) {
+    return { level: "blocked", icon: "⚠️", title: `尚有 ${d.issues.blocking.total} 筆問題待處理`, sub: "需要先處理或確認接受，才能鎖定本月", actionTab: "pendingIssues", actionLabel: "前往待處理" };
+  }
+  if (d.fee.notCalculatedCount > 0) {
+    return { level: "todo", icon: "💰", title: "分類與問題都已處理完成", sub: "下一步：執行費用計算", actionTab: "feeCalculation", actionLabel: "前往費用計算" };
+  }
+  return { level: "ok", icon: "🔓", title: "費用計算完成，本月已經準備好", sub: "建議先進行對帳確認金額，再鎖定本月", actionTab: "reconciliation", actionLabel: "前往對帳" };
+}
+
+function renderNextStepBanner(d) {
+  const step = computeNextStep(d);
+  const el = qs("#nextStepBanner");
+  el.innerHTML = `
+    <div class="next-step-banner ns-${step.level}">
+      <div class="ns-icon">${step.icon}</div>
+      <div class="ns-body">
+        <div class="ns-title">${step.title}</div>
+        <div class="ns-sub">${step.sub}</div>
+      </div>
+      ${step.actionTab ? `<button id="btnNextStepAction" data-tab="${step.actionTab}">${step.actionLabel} →</button>` : ""}
+    </div>`;
+  if (step.actionTab) {
+    qs("#btnNextStepAction").addEventListener("click", () => {
+      switchTab(step.actionTab);
+      const loader = TAB_LOADERS[step.actionTab];
+      if (loader) loader();
+    });
+  }
+}
+
 function renderDashboard(d) {
-  const lockLabel = d.lock.isLocked
-    ? `🔒 已鎖定（${d.lock.lockedBy}，${new Date(d.lock.lockedAt).toLocaleString("zh-TW")}）`
-    : "🔓 未鎖定";
+  renderNextStepBanner(d);
+
   const batchesHtml =
     d.import.batches
       .map((b) => `${STAFF_TYPE_LABEL[b.sourceStaffType] || b.sourceStaffType} v${b.versionNo}：總筆數${b.totalCount}｜成功${b.successCount}｜錯誤${b.errorCount}`)
       .join("<br>") || "尚無有效匯入批次";
 
+  const classificationDone = d.import.hasActiveBatch && d.classification.general + d.classification.overtime + d.classification.project + d.classification.conflict + d.classification.teacherUnmatched >= d.import.successCount && d.import.successCount > 0;
+
   const el = qs("#dashboardContent");
   el.innerHTML = `
     <div class="dashboard-grid">
       <div class="dashboard-card">
-        <h3>匯入</h3>
+        <div class="dc-head"><span class="dc-icon">📥</span><h3>公費代課</h3></div>
         <p>${batchesHtml}</p>
         <p>合計成功 ${d.import.successCount}｜合計錯誤 ${d.import.errorCount}</p>
       </div>
       <div class="dashboard-card">
-        <h3>分類</h3>
-        <p>一般公費 ${d.classification.general}｜超鐘點 ${d.classification.overtime}｜專案 ${d.classification.project}</p>
+        <div class="dc-head"><span class="dc-icon">👥</span><h3>分類</h3></div>
+        ${classificationDone ? badge("ok", "🟢 已完成") : d.import.hasActiveBatch ? badge("warn", "🟡 尚未完成") : badge("idle", "⚪ 尚未開始")}
+        <p style="margin-top: 8px;">一般公費 ${d.classification.general}｜超鐘點 ${d.classification.overtime}｜專案 ${d.classification.project}</p>
         <p>規則衝突 ${d.classification.conflict}｜原教師未配對 ${d.classification.teacherUnmatched}</p>
       </div>
       <div class="dashboard-card">
-        <h3>費用</h3>
-        <p>已計算 ${d.fee.calculatedCount} 筆｜尚未計算 ${d.fee.notCalculatedCount} 筆</p>
-        <p>公費金額合計：${d.fee.totalAmount}</p>
+        <div class="dc-head"><span class="dc-icon">💰</span><h3>費用</h3></div>
+        <div class="dc-figure">$${d.fee.totalAmount}<small>　已算 ${d.fee.calculatedCount} 筆／未算 ${d.fee.notCalculatedCount} 筆</small></div>
         <p>自費代課：${d.selfFunded.exists ? `${d.selfFunded.count} 筆（不列入公費金額）` : "無"}</p>
       </div>
       <div class="dashboard-card">
-        <h3>問題</h3>
-        <p>原教師未配對 ${d.issues.blocking.teacherUnmatched}｜規則衝突 ${d.issues.blocking.conflict}｜金額無法計算 ${d.issues.blocking.amountMissing}｜匯入錯誤 ${d.issues.blocking.importErrors}</p>
-        <p>合計阻擋 ${d.issues.blocking.total} 筆｜已確認接受 ${d.issues.acknowledgedCount} 筆</p>
+        <div class="dc-head"><span class="dc-icon">⚠️</span><h3>待處理</h3></div>
+        ${d.issues.blocking.total > 0 ? badge("blocked", `🔴 ${d.issues.blocking.total} 件需要處理`) : badge("ok", "🟢 沒有待處理事項")}
+        <p style="margin-top: 8px;">原教師未配對 ${d.issues.blocking.teacherUnmatched}｜規則衝突 ${d.issues.blocking.conflict}｜金額無法計算 ${d.issues.blocking.amountMissing}｜匯入錯誤 ${d.issues.blocking.importErrors}</p>
+        <p>已確認接受 ${d.issues.acknowledgedCount} 筆</p>
       </div>
       <div class="dashboard-card">
-        <h3>月結</h3>
-        <p>${lockLabel}</p>
-        <div class="modal-actions" style="justify-content: flex-start;">
+        <div class="dc-head"><span class="dc-icon">🧾</span><h3>給出納</h3></div>
+        ${d.fee.notCalculatedCount === 0 && d.fee.calculatedCount > 0 ? badge("ok", "🟢 可以產生") : badge("idle", "⚪ 尚未準備好")}
+        <p style="margin-top: 8px;">費用計算完成後即可到「給出納」頁面產生彙總並下載 Excel。</p>
+      </div>
+      <div class="dashboard-card">
+        <div class="dc-head"><span class="dc-icon">🔒</span><h3>月結</h3></div>
+        ${d.lock.isLocked ? badge("locked", "🔒 本月已鎖定") : badge("idle", "🟢 本月尚未鎖定")}
+        <div class="lock-panel" style="margin-top: 10px;">
+          <ul class="lock-checklist">
+            <li>${d.issues.blocking.teacherUnmatched === 0 ? "🟢" : "🔴"} 教師配對（${d.issues.blocking.teacherUnmatched} 筆未配對）</li>
+            <li>${d.issues.blocking.conflict === 0 ? "🟢" : "🔴"} 分類（${d.issues.blocking.conflict} 筆規則衝突）</li>
+            <li>${d.fee.notCalculatedCount === 0 ? "🟢" : "🟡"} 費用（${d.fee.notCalculatedCount} 筆尚未計算）</li>
+            <li>${d.issues.blocking.total === 0 ? "🟢" : "🔴"} 待處理（合計 ${d.issues.blocking.total} 筆阻擋）</li>
+            <li>🔵 對帳（建議鎖定前先核對金額）</li>
+          </ul>
           ${d.lock.isLocked ? `<button id="btnUnlockMonth" class="danger">解除鎖定</button>` : `<button id="btnLockMonth">鎖定本月</button>`}
         </div>
       </div>
@@ -1303,6 +1445,59 @@ function renderDashboard(d) {
   } else {
     qs("#btnLockMonth").addEventListener("click", openLockForm);
   }
+}
+
+// 歷史月結：讓使用者一眼看到這學期每個月的金額、問題數與鎖定狀態，點「查看」直接切換過去。
+async function loadHistoryTable() {
+  const semester = getCurrentSemester();
+  if (!semester || !state.semesterId) return;
+  const months = monthRange(semester.startDate, semester.endDate);
+  const results = await Promise.all(
+    months.map((m) =>
+      api(`/api/monthly-dashboard?semesterId=${state.semesterId}&year=${m.year}&month=${m.month}`)
+        .then((dashboard) => ({ ...m, dashboard }))
+        .catch(() => ({ ...m, dashboard: null }))
+    )
+  );
+
+  const tbody = qs("#historyTable tbody");
+  tbody.innerHTML = results
+    .map(({ year, month, dashboard }) => {
+      if (!dashboard || (!dashboard.import.hasActiveBatch && !dashboard.selfFunded.exists)) {
+        return `
+          <tr class="inactive-row">
+            <td>${year}年${month}月</td><td>－</td><td>－</td><td>${badge("idle", "⚪ 尚未開始")}</td>
+            <td><button data-action="goto" data-year="${year}" data-month="${month}">查看</button></td>
+          </tr>`;
+      }
+      const statusBadge = dashboard.lock.isLocked
+        ? badge("locked", "🔒 已鎖定")
+        : dashboard.issues.blocking.total > 0
+        ? badge("blocked", `🔴 ${dashboard.issues.blocking.total} 筆問題`)
+        : badge("ok", "🟢 準備完成");
+      return `
+        <tr>
+          <td>${year}年${month}月</td>
+          <td>$${dashboard.fee.totalAmount}</td>
+          <td>${dashboard.issues.blocking.total}</td>
+          <td>${statusBadge}</td>
+          <td><button data-action="goto" data-year="${year}" data-month="${month}">查看</button></td>
+        </tr>`;
+    })
+    .join("");
+
+  tbody.querySelectorAll("button[data-action='goto']").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const year = Number(btn.dataset.year);
+      const month = Number(btn.dataset.month);
+      state.closePeriod = { year, month };
+      CLOSE_PERIOD_SELECT_IDS.forEach((id) => {
+        const el = qs(`#${id}`);
+        if (el) el.value = `${year}-${month}`;
+      });
+      loadDashboard();
+    })
+  );
 }
 
 function openLockForm() {
@@ -1327,6 +1522,7 @@ function openLockForm() {
       });
       closeModal();
       await loadDashboard();
+      await loadHistoryTable();
     } catch (err) {
       showFormError(err.message);
     }
@@ -1357,6 +1553,7 @@ function openUnlockForm() {
       });
       closeModal();
       await loadDashboard();
+      await loadHistoryTable();
     } catch (err) {
       showFormError(err.message);
     }
@@ -1368,14 +1565,26 @@ function openUnlockForm() {
 async function loadPendingIssues() {
   if (!state.semesterId || !state.closePeriod) return;
   const { year, month } = state.closePeriod;
-  const issues = await api(`/api/pending-issues?semesterId=${state.semesterId}&year=${year}&month=${month}`);
+  state.pendingIssuesCache = await api(`/api/pending-issues?semesterId=${state.semesterId}&year=${year}&month=${month}`);
+  renderPendingIssues();
+}
+
+function renderPendingIssues() {
+  const issues = state.pendingIssuesCache;
+  const pendingCount = issues.filter((i) => i.status === "PENDING").length;
+  qs("#pendingSummaryLine").textContent =
+    issues.length === 0 ? "本月目前沒有任何待處理事項" : `本月共有 ${issues.length} 件事項｜⚠️ 待處理 ${pendingCount} 件｜✅ 已確認 ${issues.length - pendingCount} 件`;
+
+  const visible = issues.filter((r) => state.pendingFilter === "ALL" || r.status === state.pendingFilter);
+
   const tbody = qs("#pendingIssuesTable tbody");
-  tbody.innerHTML = issues
-    .map((r, idx) => {
+  tbody.innerHTML = visible
+    .map((r) => {
+      const idx = issues.indexOf(r);
       const statusText =
         r.status === "ACKNOWLEDGED"
-          ? `✅ 已確認接受<br><small>${r.acknowledgement.reason}（${r.acknowledgement.acknowledgedBy}）</small>`
-          : "⚠️ 待處理";
+          ? `${badge("ok", "✅ 已確認接受")}<br><small>${r.acknowledgement.reason}（${r.acknowledgement.acknowledgedBy}）</small>`
+          : badge("blocked", "⚠️ 待處理");
       return `
         <tr data-idx="${idx}" class="${r.status === "ACKNOWLEDGED" ? "" : "conflict-row"}">
           <td>${r.date ?? ""}</td>
@@ -1632,6 +1841,20 @@ function renderChunaSection(title, rows) {
 }
 
 function renderChuna(summary) {
+  const allRows = [...summary.bd, ...summary.nonBd, ...summary.unknown];
+  const stripEl = qs("#chunaSummaryStrip");
+  if (allRows.length > 0) {
+    const totalAmount = allRows.reduce((s, r) => s + Number(r.totalAmount), 0);
+    const totalCount = allRows.reduce((s, r) => s + r.totalCount, 0);
+    stripEl.hidden = false;
+    stripEl.innerHTML = `
+      <div class="summary-tile st-accent"><div class="st-label">給出納總額</div><div class="st-value">$${totalAmount}</div></div>
+      <div class="summary-tile"><div class="st-label">代課教師人數</div><div class="st-value">${allRows.length}</div></div>
+      <div class="summary-tile"><div class="st-label">總節數</div><div class="st-value">${totalCount}</div></div>`;
+  } else {
+    stripEl.hidden = true;
+  }
+
   const html =
     renderChunaSection("編制外（非BD）", summary.nonBd) +
     renderChunaSection("編制內（BD）", summary.bd) +
@@ -1682,9 +1905,19 @@ async function runReconciliation() {
 }
 
 function renderReconciliation(result) {
+  const matchCount = result.rows.filter((r) => r.status === "MATCH").length;
+  const diffCount = result.rows.length - matchCount;
+  const diffTileClass = result.totals.diff === 0 ? "st-ok" : "st-danger";
+
   const summaryEl = qs("#reconciliationSummary");
   summaryEl.hidden = false;
-  summaryEl.textContent = `系統總額：${result.totals.systemAmount}｜原始總額：${result.totals.originalAmount}｜差額：${result.totals.diff}`;
+  summaryEl.innerHTML = `
+    <div class="summary-tile"><div class="st-label">教師人數</div><div class="st-value">${result.rows.length}</div></div>
+    <div class="summary-tile st-ok"><div class="st-label">🟢 一致</div><div class="st-value">${matchCount}</div></div>
+    <div class="summary-tile ${diffCount > 0 ? 'st-danger' : ''}"><div class="st-label">🔴 有差異</div><div class="st-value">${diffCount}</div></div>
+    <div class="summary-tile"><div class="st-label">系統總額</div><div class="st-value">$${result.totals.systemAmount}</div></div>
+    <div class="summary-tile"><div class="st-label">原始總額</div><div class="st-value">$${result.totals.originalAmount}</div></div>
+    <div class="summary-tile ${diffTileClass}"><div class="st-label">差額</div><div class="st-value">$${result.totals.diff}</div></div>`;
 
   const tbody = qs("#reconciliationTable tbody");
   tbody.innerHTML = result.rows

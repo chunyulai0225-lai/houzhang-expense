@@ -2,320 +2,384 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8" />
-<title>超鐘點／專案設定</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>代課費管理系統</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <h1>超鐘點／專案設定</h1>
-    <div class="topbar">
-      <label>學期
-        <select id="semesterSelect"></select>
-      </label>
-      <label>操作人
-        <input id="changedByInput" type="text" placeholder="例如：教學組" />
-      </label>
-    </div>
-  </header>
-
-  <nav class="tabs">
-    <button class="tab-btn active" data-tab="weekly">每週固定規則</button>
-    <button class="tab-btn" data-tab="projects">專案</button>
-    <button class="tab-btn" data-tab="dateRules">單日例外</button>
-    <button class="tab-btn" data-tab="calendar">學校上課日曆</button>
-    <button class="tab-btn" data-tab="importExcel">公費代課匯入</button>
-    <button class="tab-btn" data-tab="classification">分類預覽</button>
-    <button class="tab-btn" data-tab="feeRules">費用規則</button>
-    <button class="tab-btn" data-tab="feeCalculation">費用計算</button>
-    <button class="tab-btn" data-tab="dashboard">月結首頁</button>
-    <button class="tab-btn" data-tab="pendingIssues">待處理</button>
-    <button class="tab-btn" data-tab="selfFunded">自費代課</button>
-    <button class="tab-btn" data-tab="chuna">給出納</button>
-    <button class="tab-btn" data-tab="reconciliation">對帳</button>
-  </nav>
-
-  <main>
-    <!-- 每週固定規則（超鐘點／專案共用） -->
-    <section id="tab-weekly" class="tab-panel active">
-      <div class="subtabs">
-        <button class="subtab-btn active" data-ruletype="OVERTIME">超鐘點</button>
-        <button class="subtab-btn" data-ruletype="PROJECT">專案</button>
-      </div>
-
-      <div id="conflictBanner" class="conflict-banner" hidden></div>
-
-      <div class="filters">
-        <input id="filterTeacher" type="text" placeholder="搜尋教師姓名" />
-        <select id="filterWeekday">
-          <option value="">全部星期</option>
-          <option value="MON">星期一</option>
-          <option value="TUE">星期二</option>
-          <option value="WED">星期三</option>
-          <option value="THU">星期四</option>
-          <option value="FRI">星期五</option>
-        </select>
-        <select id="filterProject">
-          <option value="">全部專案</option>
-        </select>
-        <button id="btnNewWeeklyRule">＋ 新增規則</button>
-      </div>
-
-      <table id="weeklyRuleTable">
-        <thead>
-          <tr>
-            <th>教師</th><th>星期</th><th>節次</th><th>科目</th><th>類型</th><th>專案</th>
-            <th>每週節數</th><th>生效日期</th><th>結束日期</th><th>狀態</th><th>操作</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <!-- 專案基本資料 -->
-    <section id="tab-projects" class="tab-panel">
-      <div class="filters">
-        <button id="btnNewProject">＋ 新增專案</button>
-      </div>
-      <table id="projectTable">
-        <thead><tr><th>專案名稱</th><th>狀態</th><th>備註</th><th>操作</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <!-- 單日例外 -->
-    <section id="tab-dateRules" class="tab-panel">
-      <div class="filters">
-        <label><input id="filterIncludeCancelled" type="checkbox" /> 顯示已取消</label>
-        <button id="btnNewDateRule">＋ 新增單日例外</button>
-      </div>
-      <table id="dateRuleTable">
-        <thead><tr><th>日期</th><th>教師</th><th>節次</th><th>改判為</th><th>專案</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <!-- 學校上課日曆 -->
-    <section id="tab-calendar" class="tab-panel">
-      <div class="filters">
-        <select id="calendarMonthSelect"></select>
-        <button id="btnGenerateCalendar">產生本學期日曆</button>
-      </div>
-      <div class="calendar-layout">
-        <table id="calendarTable" class="calendar-table">
-          <thead><tr><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th><th>日</th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <aside id="calendarSummary" class="calendar-summary"></aside>
-      </div>
-    </section>
-
-    <!-- 公費代課 Excel 匯入 -->
-    <section id="tab-importExcel" class="tab-panel">
-      <div class="import-form">
-        <label>匯入年月
-          <select id="importPeriodSelect"></select>
-        </label>
-        <label>Excel 檔案
-          <input id="importFile" type="file" accept=".xlsx" />
-        </label>
-        <button id="btnInspectFile">下一步：選擇工作表</button>
-      </div>
-
-      <div id="sheetPickerForm" class="import-form" hidden>
-        <label>要匯入的工作表
-          <select id="importSheetSelect"></select>
-        </label>
-        <label>資料來源類型（僅為原始資料來源標記，不影響任何計算）
-          <select id="importStaffTypeSelect">
-            <option value="UNKNOWN">未指定</option>
-            <option value="BD">編制內（BD）</option>
-            <option value="NON_BD">編制外（非BD）</option>
-          </select>
-        </label>
-        <button id="btnUploadImport">確認匯入這個工作表</button>
-      </div>
-
-      <div id="importResult" class="import-result" hidden>
-        <h3>匯入結果</h3>
-        <div id="importSummary"></div>
-        <div id="importDetectedHeaders"></div>
-        <table id="importErrorTable" class="import-error-table" hidden>
-          <thead><tr><th>列</th><th>欄位</th><th>問題</th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <div id="importUnmatchedSection" hidden>
-          <h4>未匹配教師</h4>
-          <button id="btnAutoApplyMatches">套用系統偵測到的唯一比對建議</button>
-          <table id="importUnmatchedTable">
-            <thead><tr><th>原始姓名</th><th>欄位</th><th>候選人員</th><th>操作</th></tr></thead>
-            <tbody></tbody>
-          </table>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon">🎓</div>
+        <div class="brand-text">
+          <div class="brand-title">代課費管理系統</div>
+          <div class="brand-sub" id="semesterBadge">載入中…</div>
         </div>
       </div>
+      <nav class="nav-groups">
+        <button class="nav-btn tab-btn active" data-tab="dashboard">🏠 月結首頁</button>
+        <button class="nav-btn tab-btn" data-tab="importExcel">📥 公費代課匯入</button>
+        <button class="nav-btn tab-btn" data-tab="classification">👥 分類預覽</button>
+        <button class="nav-btn tab-btn" data-tab="pendingIssues">⚠️ 待處理</button>
+        <button class="nav-btn tab-btn" data-tab="feeCalculation">💰 費用計算</button>
+        <button class="nav-btn tab-btn" data-tab="selfFunded">💵 自費代課</button>
+        <button class="nav-btn tab-btn" data-tab="reconciliation">📊 對帳</button>
+        <button class="nav-btn tab-btn" data-tab="chuna">🧾 給出納</button>
 
-      <h3>匯入批次紀錄</h3>
-      <table id="importBatchTable">
-        <thead><tr><th>年月</th><th>來源</th><th>版本</th><th>檔名</th><th>匯入時間</th><th>總筆數</th><th>成功</th><th>錯誤</th><th>狀態</th><th>操作</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
+        <div class="nav-group-label" id="settingsToggle">⚙️ 基本設定 <span class="chev">▾</span></div>
+        <div class="nav-subgroup" id="settingsSubgroup">
+          <button class="nav-btn tab-btn sub" data-tab="feeRules">費用規則</button>
+          <button class="nav-btn tab-btn sub" data-tab="projects">專案</button>
+          <button class="nav-btn tab-btn sub" data-tab="weekly">每週固定規則</button>
+          <button class="nav-btn tab-btn sub" data-tab="dateRules">單日例外</button>
+          <button class="nav-btn tab-btn sub" data-tab="calendar">學校上課日曆</button>
+        </div>
+      </nav>
+    </aside>
 
-    <!-- Phase 8：分類預覽（只判斷來源類型，不算金額） -->
-    <section id="tab-classification" class="tab-panel">
-      <div class="filters">
-        <select id="classificationBatchSelect"></select>
-        <button id="btnRunClassification">執行自動分類</button>
-      </div>
-      <div id="classificationSummary" class="import-result" hidden></div>
+    <div class="main-area">
+      <header class="topheader">
+        <button class="menu-toggle" id="menuToggle">☰</button>
+        <div class="page-title" id="pageTitle">🏠 月結首頁</div>
+        <div class="topbar">
+          <label>學期
+            <select id="semesterSelect"></select>
+          </label>
+          <label>操作人
+            <input id="changedByInput" type="text" placeholder="例如：教學組" />
+          </label>
+        </div>
+      </header>
 
-      <div class="filters">
-        <select id="filterFundingSource">
-          <option value="">全部分類</option>
-          <option value="GENERAL">一般公費</option>
-          <option value="OVERTIME">超鐘點</option>
-          <option value="PROJECT">專案</option>
-          <option value="UNDETERMINED">待確認</option>
-        </select>
-        <select id="filterClassificationMethod">
-          <option value="">全部規則來源</option>
-          <option value="WEEKLY_RULE">週規則</option>
-          <option value="DATE_EXCEPTION">單日例外</option>
-          <option value="GENERAL_DEFAULT">無規則(一般公費)</option>
-          <option value="MANUAL_OVERRIDE">人工覆寫</option>
-          <option value="CONFLICT">規則衝突</option>
-          <option value="TEACHER_UNMATCHED">原教師未配對</option>
-        </select>
-        <select id="filterManualOverride">
-          <option value="">人工覆寫：不篩選</option>
-          <option value="true">僅人工覆寫</option>
-          <option value="false">僅系統判斷</option>
-        </select>
-        <select id="filterStaffType">
-          <option value="">BD/非BD：全部</option>
-          <option value="BD">編制內(BD)</option>
-          <option value="NON_BD">編制外(非BD)</option>
-          <option value="UNKNOWN">未指定</option>
-        </select>
-      </div>
+      <main>
+        <!-- 月結首頁：使用者進入後的主要入口 -->
+        <section id="tab-dashboard" class="tab-panel active">
+          <div class="dash-toolbar">
+            <span class="period-label">檢視月份</span>
+            <select id="closePeriodSelect"></select>
+            <button id="btnRefreshDashboard">重新整理</button>
+          </div>
+          <div id="nextStepBanner"></div>
+          <div id="dashboardContent"></div>
 
-      <table id="classificationTable">
-        <thead>
-          <tr>
-            <th>日期</th><th>原教師</th><th>節次</th><th>班級</th><th>科目</th><th>代課教師</th>
-            <th>BD/非BD</th><th>自動分類</th><th>規則來源</th><th>分類依據</th><th>專案</th><th>狀態</th><th>操作</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-    <!-- Phase 9 第一階段：費用規則（只管理 SUBSTITUTE_PERIOD / OVERTIME_PERIOD，版本化、不可覆蓋舊資料） -->
-    <section id="tab-feeRules" class="tab-panel">
-      <div class="filters">
-        <select id="feeRuleTypeSelect">
-          <option value="SUBSTITUTE_PERIOD">一般公費／專案代課鐘點（SUBSTITUTE_PERIOD）</option>
-          <option value="OVERTIME_PERIOD">超鐘點（OVERTIME_PERIOD）</option>
-        </select>
-        <button id="btnNewFeeRule">＋ 新增費率版本</button>
-      </div>
-      <p class="hint">專案代課／回兼目前沿用「SUBSTITUTE_PERIOD」這張費率表，不是獨立費率。代導師費／日薪／半日薪這三種 FeeType 保留但第一階段不開放在這裡新增，也不會進入費用計算。</p>
-      <table id="feeRuleTable">
-        <thead><tr><th>金額</th><th>生效日期</th><th>結束日期</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
+          <div class="panel" style="margin-top: 20px;">
+            <h3 style="margin-top: 0; color: var(--green-800);">📅 歷史月結</h3>
+            <p class="hint" style="margin-top: -4px;">快速看到這學期每個月的匯入金額、問題數與鎖定狀態，點「查看」直接切換過去。</p>
+            <div class="history-table-wrap">
+              <table id="historyTable">
+                <thead><tr><th>年月</th><th>公費金額</th><th>待處理問題</th><th>狀態</th><th>操作</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
 
-    <!-- Phase 9 第一階段：節次型費用計算（只算 GENERAL/OVERTIME/PROJECT） -->
-    <section id="tab-feeCalculation" class="tab-panel">
-      <div class="filters">
-        <select id="feeCalcPeriodSelect"></select>
-        <button id="btnRunFeeCalculation">執行費用計算</button>
-      </div>
-      <p class="hint">只計算分類結果為一般公費／超鐘點／專案的紀錄；規則衝突、原教師未配對、尚未分類的資料不會被計算，金額維持空白。代導師費／日薪／半日薪／自費代課／專案上限尚未實作。</p>
-      <div id="feeCalcSummaryMsg" class="import-result" hidden></div>
-      <table id="feeSummaryTable">
-        <thead>
-          <tr>
-            <th>代課教師</th><th>一般公費節數</th><th>一般公費金額</th>
-            <th>超鐘點節數</th><th>超鐘點金額</th><th>專案節數</th><th>專案金額</th>
-            <th>合計節數</th><th>合計金額</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
+        <!-- 公費代課 Excel 匯入 -->
+        <section id="tab-importExcel" class="tab-panel">
+          <div class="panel" style="margin-bottom: 16px;">
+            <div class="import-form">
+              <label>匯入年月
+                <select id="importPeriodSelect"></select>
+              </label>
+              <label>Excel 檔案
+                <input id="importFile" type="file" accept=".xlsx" />
+              </label>
+              <button id="btnInspectFile">下一步：選擇工作表</button>
+            </div>
 
-    <!-- Implementation Batch：月結首頁 -->
-    <section id="tab-dashboard" class="tab-panel">
-      <div class="filters">
-        <select id="closePeriodSelect"></select>
-        <button id="btnRefreshDashboard">重新整理</button>
-      </div>
-      <div id="dashboardContent"></div>
-    </section>
+            <div id="sheetPickerForm" class="import-form" hidden>
+              <label>要匯入的工作表
+                <select id="importSheetSelect"></select>
+              </label>
+              <label>資料來源類型（僅為原始資料來源標記，不影響任何計算）
+                <select id="importStaffTypeSelect">
+                  <option value="UNKNOWN">未指定</option>
+                  <option value="BD">編制內（BD）</option>
+                  <option value="NON_BD">編制外（非BD）</option>
+                </select>
+              </label>
+              <button id="btnUploadImport">確認匯入這個工作表</button>
+            </div>
+          </div>
 
-    <!-- Implementation Batch：待處理（統一問題清單） -->
-    <section id="tab-pendingIssues" class="tab-panel">
-      <div class="filters">
-        <select id="pendingPeriodSelect"></select>
-        <button id="btnRefreshPending">重新整理</button>
-      </div>
-      <table id="pendingIssuesTable">
-        <thead>
-          <tr>
-            <th>日期</th><th>原教師</th><th>代課教師</th><th>節次</th><th>班級</th><th>科目</th>
-            <th>問題類型</th><th>問題說明</th><th>目前狀態</th><th>操作</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
+          <div id="importResult" class="import-result" hidden>
+            <h3>匯入結果</h3>
+            <div id="importSummary"></div>
+            <div id="importDetectedHeaders"></div>
+            <table id="importErrorTable" class="import-error-table" hidden>
+              <thead><tr><th>列</th><th>欄位</th><th>問題</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <div id="importUnmatchedSection" hidden>
+              <h4>未匹配教師</h4>
+              <button id="btnAutoApplyMatches">套用系統偵測到的唯一比對建議</button>
+              <table id="importUnmatchedTable">
+                <thead><tr><th>原始姓名</th><th>欄位</th><th>候選人員</th><th>操作</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
 
-    <!-- Implementation Batch：自費代課 -->
-    <section id="tab-selfFunded" class="tab-panel">
-      <div class="filters">
-        <select id="selfFundedPeriodSelect"></select>
-        <button id="btnNewSelfFunded">＋ 新增自費代課</button>
-      </div>
-      <table id="selfFundedTable">
-        <thead>
-          <tr>
-            <th>日期</th><th>原教師</th><th>代課教師</th><th>節次</th><th>班級</th><th>科目</th>
-            <th>金額</th><th>備註</th><th>建立人</th><th>操作</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
+          <h3>匯入批次紀錄</h3>
+          <div class="panel">
+            <table id="importBatchTable">
+              <thead><tr><th>年月</th><th>來源</th><th>版本</th><th>檔名</th><th>匯入時間</th><th>總筆數</th><th>成功</th><th>錯誤</th><th>狀態</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
 
-    <!-- Implementation Batch：給出納 -->
-    <section id="tab-chuna" class="tab-panel">
-      <div class="filters">
-        <select id="chunaPeriodSelect"></select>
-        <button id="btnLoadChuna">產生給出納彙總</button>
-        <button id="btnExportChuna">下載 Excel</button>
-      </div>
-      <div id="chunaContent"></div>
-    </section>
+        <!-- 分類預覽 -->
+        <section id="tab-classification" class="tab-panel">
+          <div class="filters">
+            <select id="classificationBatchSelect"></select>
+            <button id="btnRunClassification">執行自動分類</button>
+          </div>
+          <div id="classificationSummary" class="import-result" hidden></div>
 
-    <!-- Implementation Batch：對帳 -->
-    <section id="tab-reconciliation" class="tab-panel">
-      <div class="filters">
-        <select id="reconciliationPeriodSelect"></select>
-        <input id="reconciliationFile" type="file" accept=".xlsx" />
-        <button id="btnRunReconciliation">上傳並比對</button>
-      </div>
-      <div id="reconciliationSummary" class="import-result" hidden></div>
-      <table id="reconciliationTable">
-        <thead>
-          <tr>
-            <th>教師</th><th>系統節數</th><th>原始節數</th><th>系統金額</th><th>原始金額</th>
-            <th>差額</th><th>狀態</th><th>可能原因</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-  </main>
+          <div class="filters">
+            <select id="filterFundingSource">
+              <option value="">全部分類</option>
+              <option value="GENERAL">一般公費</option>
+              <option value="OVERTIME">超鐘點</option>
+              <option value="PROJECT">專案</option>
+              <option value="UNDETERMINED">待確認</option>
+            </select>
+            <select id="filterClassificationMethod">
+              <option value="">全部規則來源</option>
+              <option value="WEEKLY_RULE">週規則</option>
+              <option value="DATE_EXCEPTION">單日例外</option>
+              <option value="GENERAL_DEFAULT">無規則(一般公費)</option>
+              <option value="MANUAL_OVERRIDE">人工覆寫</option>
+              <option value="CONFLICT">規則衝突</option>
+              <option value="TEACHER_UNMATCHED">原教師未配對</option>
+            </select>
+            <select id="filterManualOverride">
+              <option value="">人工覆寫：不篩選</option>
+              <option value="true">僅人工覆寫</option>
+              <option value="false">僅系統判斷</option>
+            </select>
+            <select id="filterStaffType">
+              <option value="">BD/非BD：全部</option>
+              <option value="BD">編制內(BD)</option>
+              <option value="NON_BD">編制外(非BD)</option>
+              <option value="UNKNOWN">未指定</option>
+            </select>
+          </div>
+
+          <div class="panel">
+            <table id="classificationTable">
+              <thead>
+                <tr>
+                  <th>日期</th><th>原教師</th><th>節次</th><th>班級</th><th>科目</th><th>代課教師</th>
+                  <th>BD/非BD</th><th>自動分類</th><th>規則來源</th><th>分類依據</th><th>專案</th><th>狀態</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 待處理（統一問題清單） -->
+        <section id="tab-pendingIssues" class="tab-panel">
+          <div class="filters">
+            <select id="pendingPeriodSelect"></select>
+            <button id="btnRefreshPending">重新整理</button>
+          </div>
+          <div id="pendingSummaryLine" class="hint" style="font-size: 15px; font-weight: 700; color: var(--green-800);"></div>
+          <div class="subtabs" id="pendingFilterTabs">
+            <button class="subtab-btn active" data-filter="ALL">全部</button>
+            <button class="subtab-btn" data-filter="PENDING">⚠️ 待處理</button>
+            <button class="subtab-btn" data-filter="ACKNOWLEDGED">✅ 已確認</button>
+          </div>
+          <div class="panel">
+            <table id="pendingIssuesTable">
+              <thead>
+                <tr>
+                  <th>日期</th><th>原教師</th><th>代課教師</th><th>節次</th><th>班級</th><th>科目</th>
+                  <th>問題類型</th><th>問題說明</th><th>目前狀態</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 費用計算 -->
+        <section id="tab-feeCalculation" class="tab-panel">
+          <div class="filters">
+            <select id="feeCalcPeriodSelect"></select>
+            <button id="btnRunFeeCalculation">執行費用計算</button>
+          </div>
+          <p class="hint">只計算分類結果為一般公費／超鐘點／專案的紀錄；規則衝突、原教師未配對、尚未分類的資料不會被計算，金額維持空白。代導師費／日薪／半日薪尚未實作（無真實使用案例，不猜公式）。</p>
+          <div id="feeCalcSummaryMsg" class="import-result" hidden></div>
+          <div id="feeCalcSummaryStrip" class="summary-strip" hidden></div>
+          <div class="panel">
+            <table id="feeSummaryTable">
+              <thead>
+                <tr>
+                  <th>代課教師</th><th>一般公費節數</th><th>一般公費金額</th>
+                  <th>超鐘點節數</th><th>超鐘點金額</th><th>專案節數</th><th>專案金額</th>
+                  <th>合計節數</th><th>合計金額</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 自費代課 -->
+        <section id="tab-selfFunded" class="tab-panel">
+          <p class="hint">🔹本頁僅顯示自費代課紀錄，金額由學校/單位自行吸收，不會計入公費金額或給出納彙總。</p>
+          <div class="filters">
+            <select id="selfFundedPeriodSelect"></select>
+            <button id="btnNewSelfFunded">＋ 新增自費代課</button>
+          </div>
+          <div class="panel">
+            <table id="selfFundedTable">
+              <thead>
+                <tr>
+                  <th>日期</th><th>原教師</th><th>代課教師</th><th>節次</th><th>班級</th><th>科目</th>
+                  <th>金額</th><th>備註</th><th>建立人</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 對帳 -->
+        <section id="tab-reconciliation" class="tab-panel">
+          <div class="filters">
+            <select id="reconciliationPeriodSelect"></select>
+            <input id="reconciliationFile" type="file" accept=".xlsx" />
+            <button id="btnRunReconciliation">上傳並比對</button>
+          </div>
+          <div id="reconciliationSummary" class="summary-strip" hidden></div>
+          <div class="panel">
+            <table id="reconciliationTable">
+              <thead>
+                <tr>
+                  <th>教師</th><th>系統節數</th><th>原始節數</th><th>系統金額</th><th>原始金額</th>
+                  <th>差額</th><th>狀態</th><th>可能原因</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 給出納 -->
+        <section id="tab-chuna" class="tab-panel">
+          <div class="filters">
+            <select id="chunaPeriodSelect"></select>
+            <button id="btnLoadChuna">產生給出納彙總</button>
+            <button id="btnExportChuna">⬇ 下載 Excel</button>
+          </div>
+          <div id="chunaSummaryStrip" class="summary-strip" hidden></div>
+          <div id="chunaContent"></div>
+        </section>
+
+        <!-- 基本設定：費用規則 -->
+        <section id="tab-feeRules" class="tab-panel">
+          <div class="filters">
+            <select id="feeRuleTypeSelect">
+              <option value="SUBSTITUTE_PERIOD">一般公費／專案代課鐘點（SUBSTITUTE_PERIOD）</option>
+              <option value="OVERTIME_PERIOD">超鐘點（OVERTIME_PERIOD）</option>
+            </select>
+            <button id="btnNewFeeRule">＋ 新增費率版本</button>
+          </div>
+          <p class="hint">專案代課／回兼目前沿用「SUBSTITUTE_PERIOD」這張費率表，不是獨立費率。代導師費／日薪／半日薪這三種 FeeType 保留但不開放在這裡新增，也不會進入費用計算。</p>
+          <div class="panel">
+            <table id="feeRuleTable">
+              <thead><tr><th>金額</th><th>生效日期</th><th>結束日期</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 基本設定：專案 -->
+        <section id="tab-projects" class="tab-panel">
+          <div class="filters">
+            <button id="btnNewProject">＋ 新增專案</button>
+          </div>
+          <div class="panel">
+            <table id="projectTable">
+              <thead><tr><th>專案名稱</th><th>狀態</th><th>備註</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 基本設定：每週固定規則（超鐘點／專案共用） -->
+        <section id="tab-weekly" class="tab-panel">
+          <div class="subtabs">
+            <button class="subtab-btn active" data-ruletype="OVERTIME">超鐘點</button>
+            <button class="subtab-btn" data-ruletype="PROJECT">專案</button>
+          </div>
+
+          <div id="conflictBanner" class="conflict-banner" hidden></div>
+
+          <div class="filters">
+            <input id="filterTeacher" type="text" placeholder="搜尋教師姓名" />
+            <select id="filterWeekday">
+              <option value="">全部星期</option>
+              <option value="MON">星期一</option>
+              <option value="TUE">星期二</option>
+              <option value="WED">星期三</option>
+              <option value="THU">星期四</option>
+              <option value="FRI">星期五</option>
+            </select>
+            <select id="filterProject">
+              <option value="">全部專案</option>
+            </select>
+            <button id="btnNewWeeklyRule">＋ 新增規則</button>
+          </div>
+
+          <div class="panel">
+            <table id="weeklyRuleTable">
+              <thead>
+                <tr>
+                  <th>教師</th><th>星期</th><th>節次</th><th>科目</th><th>類型</th><th>專案</th>
+                  <th>每週節數</th><th>生效日期</th><th>結束日期</th><th>狀態</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 基本設定：單日例外 -->
+        <section id="tab-dateRules" class="tab-panel">
+          <div class="filters">
+            <label><input id="filterIncludeCancelled" type="checkbox" /> 顯示已取消</label>
+            <button id="btnNewDateRule">＋ 新增單日例外</button>
+          </div>
+          <div class="panel">
+            <table id="dateRuleTable">
+              <thead><tr><th>日期</th><th>教師</th><th>節次</th><th>改判為</th><th>專案</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 基本設定：學校上課日曆 -->
+        <section id="tab-calendar" class="tab-panel">
+          <div class="filters">
+            <select id="calendarMonthSelect"></select>
+            <button id="btnGenerateCalendar">產生本學期日曆</button>
+          </div>
+          <div class="calendar-layout">
+            <table id="calendarTable" class="calendar-table">
+              <thead><tr><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th><th>日</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <aside id="calendarSummary" class="calendar-summary"></aside>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
 
   <div id="modalBackdrop" class="modal-backdrop" hidden>
     <div id="modalBox" class="modal-box"></div>
