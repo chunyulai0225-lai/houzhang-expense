@@ -1,5 +1,13 @@
-// Phase 5 管理介面：純 vanilla JS，沒有建置流程，呼叫 /api/* 取得/送出資料。
+// 管理介面：純 vanilla JS，沒有建置流程。
 // 目標是「行政人員容易操作」，不是視覺華麗。
+//
+// 後端從 Node/Express 遷移到 Google Apps Script + Google Sheets 之後，唯一改變的是
+// 這裡的傳輸方式：原本呼叫 /api/*，現在呼叫 gasApi(action, payload) 打到 GAS Web App
+// 網址。UI 渲染邏輯、資料形狀、按鈕行為全部不變。
+
+// ⚠️ 部署到你自己的 Apps Script 專案後，把這裡換成你自己的 Web App 網址
+// （Apps Script 編輯器 → 部署 → 管理部署作業 → 網頁應用程式網址）。
+const GAS_BASE_URL = "https://script.google.com/macros/s/AKfycbzbXaAfIB-o4ZNdyO65OQ2Fkm29oRVA_PPrBYHFTCWNmhzbX2Di9qfWw_qgJ96U1Sfd/exec";
 
 const WEEKDAY_LABEL = { MON: "星期一", TUE: "星期二", WED: "星期三", THU: "星期四", FRI: "星期五" };
 const CLASSIFICATION_LABEL = { GENERAL: "一般公費", OVERTIME: "超鐘點", PROJECT: "專案" };
@@ -70,6 +78,8 @@ const state = {
   calendarYear: null,
   calendarMonth: null,
   importPeriod: null, // { year, month }
+  importFile: null, // 步驟一選擇的檔案（File 物件），步驟二直接複用，不用重新選檔
+  importWorkbook: null, // 步驟一用 SheetJS 讀出來的 workbook，步驟二直接複用，不用重新讀檔
   currentImportId: null,
   classificationBatchId: null,
   feeCalcPeriod: null, // { year, month }
@@ -88,16 +98,21 @@ function getCurrentSemester() {
   return state.semesters.find((s) => s.id === state.semesterId) || null;
 }
 
-async function api(path, options) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
+// 呼叫 GAS Web App。刻意用 POST + 不設自訂 Content-Type（維持瀏覽器預設
+// text/plain;charset=UTF-8），這樣瀏覽器會視為 CORS「simple request」，不會先送
+// OPTIONS preflight——Apps Script Web App 沒有 doOptions()，沒辦法處理 preflight，
+// 這是唯一可行的繞法。所有 GET/POST/PATCH/DELETE 語意都靠 payload 裡的欄位表達，
+// 一律用同一個 doPost 進入點（見 gas/Router.gs）。
+async function gasApi(action, payload) {
+  const res = await fetch(GAS_BASE_URL, {
+    method: "POST",
+    body: JSON.stringify({ action, payload: payload || {} }),
   });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(body.error || `請求失敗（${res.status}）`);
+  const body = await res.json().catch(() => ({ ok: false, error: `無法解析伺服器回應（${res.status}）` }));
+  if (!body.ok) {
+    throw new Error(body.error || "請求失敗");
   }
-  return body;
+  return body.data;
 }
 
 function qs(sel) { return document.querySelector(sel); }
@@ -168,10 +183,7 @@ async function init() {
     loadCalendar();
   });
   qs("#btnGenerateCalendar").addEventListener("click", async () => {
-    const result = await api("/api/calendar/generate", {
-      method: "POST",
-      body: JSON.stringify({ semesterId: state.semesterId, changedBy: state.changedBy || undefined }),
-    });
+    const result = await gasApi("generateSemesterCalendar", { semesterId: state.semesterId, changedBy: state.changedBy || undefined });
     alert(`已產生 ${result.createdCount} 天（略過已存在 ${result.skippedCount} 天）`);
     await setupCalendarMonthOptions();
     await loadCalendar();
@@ -181,10 +193,7 @@ async function init() {
   qs("#btnUploadImport").addEventListener("click", uploadImportFile);
   qs("#btnAutoApplyMatches").addEventListener("click", async () => {
     if (!state.currentImportId) return;
-    const result = await api(`/api/monthly-imports/${state.currentImportId}/auto-apply-matches`, {
-      method: "POST",
-      body: JSON.stringify({ changedBy: state.changedBy || undefined }),
-    });
+    const result = await gasApi("autoApplyUnambiguousTeacherMatches", { id: state.currentImportId, changedBy: state.changedBy || undefined });
     alert(`已套用 ${result.appliedCount} 筆，剩餘待處理 ${result.remainingCount} 筆`);
     await loadUnmatchedForImport(state.currentImportId);
   });
@@ -198,10 +207,7 @@ async function init() {
       alert("請先選擇要分類的匯入批次");
       return;
     }
-    const summary = await api(`/api/monthly-imports/${state.classificationBatchId}/classify`, {
-      method: "POST",
-      body: JSON.stringify({ changedBy: state.changedBy || undefined }),
-    });
+    const summary = await gasApi("classifyMonthlyImport", { id: state.classificationBatchId, changedBy: state.changedBy || undefined });
     const summaryEl = qs("#classificationSummary");
     summaryEl.hidden = false;
     summaryEl.textContent =
@@ -229,7 +235,7 @@ async function init() {
   qs("#btnExportChuna").addEventListener("click", exportChuna);
   qs("#btnRunReconciliation").addEventListener("click", runReconciliation);
 
-  const semesters = await api("/api/semesters");
+  const semesters = await gasApi("listSemesters");
   state.semesters = semesters;
   const select = qs("#semesterSelect");
   select.innerHTML = semesters
@@ -242,7 +248,7 @@ async function init() {
   }
   updateSemesterBadge();
 
-  state.periodSlots = await api("/api/period-slots");
+  state.periodSlots = await gasApi("listPeriodSlots");
 
   await loadForSemester();
 }
@@ -285,7 +291,7 @@ const TAB_LOADERS = {
 
 async function loadForSemester() {
   if (!state.semesterId) return;
-  state.projects = await api(`/api/projects?semesterId=${state.semesterId}`);
+  state.projects = await gasApi("listProjects", { semesterId: state.semesterId });
   const projectFilter = qs("#filterProject");
   projectFilter.innerHTML =
     `<option value="">全部專案</option>` + state.projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
@@ -305,16 +311,16 @@ async function loadForSemester() {
 
 async function loadWeeklyRules() {
   if (!state.semesterId) return;
-  const params = new URLSearchParams({ semesterId: state.semesterId, ruleType: state.ruleType });
   const teacher = qs("#filterTeacher").value.trim();
   const weekday = qs("#filterWeekday").value;
   const projectId = qs("#filterProject").value;
-  if (weekday) params.set("weekday", weekday);
-  if (projectId) params.set("projectId", projectId);
+  const listPayload = { semesterId: state.semesterId, ruleType: state.ruleType };
+  if (weekday) listPayload.weekday = weekday;
+  if (projectId) listPayload.projectId = projectId;
 
   const [rules, conflicts] = await Promise.all([
-    api(`/api/weekly-rules?${params.toString()}`),
-    api(`/api/weekly-rules/conflicts?semesterId=${state.semesterId}`),
+    gasApi("listWeeklyRules", listPayload),
+    gasApi("weeklyRuleConflicts", { semesterId: state.semesterId }),
   ]);
 
   const conflictRuleIds = new Set(conflicts.flatMap((c) => c.ruleIds));
@@ -417,7 +423,7 @@ function openWeeklyRuleForm(existing) {
       if (!existing) {
         const name = qs("#f-personName").value.trim();
         if (!name) throw new Error("請輸入教師姓名");
-        const matches = await api(`/api/persons?search=${encodeURIComponent(name)}`);
+        const matches = await gasApi("listPersons", { search: name });
         const exact = matches.find((p) => p.name === name);
         if (!exact) {
           throw new Error(`系統找不到教師「${name}」，請先在人員管理建立此人員（Phase 5 不在此處自動建立人員）`);
@@ -442,8 +448,8 @@ function openWeeklyRuleForm(existing) {
       if (!payload.effectiveDate) throw new Error("請填寫生效日期");
 
       const result = existing
-        ? await api(`/api/weekly-rules/${existing.id}`, { method: "PATCH", body: JSON.stringify({ ...payload, reason: "透過管理介面修改" }) })
-        : await api("/api/weekly-rules", { method: "POST", body: JSON.stringify(payload) });
+        ? await gasApi("updateWeeklyRule", { ...payload, id: existing.id, reason: "透過管理介面修改" })
+        : await gasApi("createWeeklyRule", payload);
 
       closeModal();
       await loadWeeklyRules();
@@ -471,10 +477,7 @@ function openDeactivateWeeklyRuleForm(ruleId) {
   qs("#f-cancel").addEventListener("click", closeModal);
   qs("#f-submit").addEventListener("click", async () => {
     try {
-      await api(`/api/weekly-rules/${ruleId}/deactivate`, {
-        method: "POST",
-        body: JSON.stringify({ endDate: qs("#f-endDate").value, reason: qs("#f-reason").value.trim(), changedBy: state.changedBy || undefined }),
-      });
+      await gasApi("deactivateWeeklyRule", { id: ruleId, endDate: qs("#f-endDate").value, reason: qs("#f-reason").value.trim(), changedBy: state.changedBy || undefined });
       closeModal();
       await loadWeeklyRules();
     } catch (err) {
@@ -487,7 +490,7 @@ function openDeactivateWeeklyRuleForm(ruleId) {
 
 async function loadProjects() {
   if (!state.semesterId) return;
-  const projects = await api(`/api/projects?semesterId=${state.semesterId}`);
+  const projects = await gasApi("listProjects", { semesterId: state.semesterId });
   const tbody = qs("#projectTable tbody");
   tbody.innerHTML = projects
     .map(
@@ -514,10 +517,7 @@ async function loadProjects() {
     btn.addEventListener("click", async (e) => {
       const id = e.target.closest("tr").dataset.id;
       const proj = projects.find((p) => p.id === id);
-      await api(`/api/projects/${id}/active`, {
-        method: "PATCH",
-        body: JSON.stringify({ isActive: !proj.isActive, changedBy: state.changedBy || undefined }),
-      });
+      await gasApi("setProjectActive", { id, isActive: !proj.isActive, changedBy: state.changedBy || undefined });
       await loadForSemester();
     })
   );
@@ -541,12 +541,9 @@ function openProjectForm(existing) {
       if (!name) throw new Error("請輸入專案名稱");
       const note = qs("#f-note").value.trim() || undefined;
       if (existing) {
-        await api(`/api/projects/${existing.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ name, note, changedBy: state.changedBy || undefined, reason: "透過管理介面修改" }),
-        });
+        await gasApi("updateProject", { id: existing.id, name, note, changedBy: state.changedBy || undefined, reason: "透過管理介面修改" });
       } else {
-        await api("/api/projects", { method: "POST", body: JSON.stringify({ semesterId: state.semesterId, name, note, changedBy: state.changedBy || undefined }) });
+        await gasApi("createProject", { semesterId: state.semesterId, name, note, changedBy: state.changedBy || undefined });
       }
       closeModal();
       await loadForSemester();
@@ -561,7 +558,7 @@ function openProjectForm(existing) {
 async function loadDateRules() {
   if (!state.semesterId) return;
   const includeCancelled = qs("#filterIncludeCancelled").checked;
-  const rules = await api(`/api/date-rules?semesterId=${state.semesterId}&includeCancelled=${includeCancelled}`);
+  const rules = await gasApi("listDateRules", { semesterId: state.semesterId, includeCancelled });
   const tbody = qs("#dateRuleTable tbody");
   tbody.innerHTML = rules
     .map(
@@ -583,7 +580,7 @@ async function loadDateRules() {
     btn.addEventListener("click", async (e) => {
       const id = e.target.closest("tr").dataset.id;
       const reason = prompt("取消原因：") || undefined;
-      await api(`/api/date-rules/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason, changedBy: state.changedBy || undefined }) });
+      await gasApi("cancelDateRule", { id, reason, changedBy: state.changedBy || undefined });
       await loadDateRules();
     })
   );
@@ -616,23 +613,20 @@ function openDateRuleForm() {
     try {
       const name = qs("#f-personName").value.trim();
       if (!name) throw new Error("請輸入教師姓名");
-      const matches = await api(`/api/persons?search=${encodeURIComponent(name)}`);
+      const matches = await gasApi("listPersons", { search: name });
       const exact = matches.find((p) => p.name === name);
       if (!exact) throw new Error(`系統找不到教師「${name}」`);
 
       const classification = qs("#f-classification").value;
-      await api("/api/date-rules", {
-        method: "POST",
-        body: JSON.stringify({
-          semesterId: state.semesterId,
-          date: qs("#f-date").value,
-          personId: exact.id,
-          periodCode: qs("#f-periodCode").value,
-          overrideClassification: classification,
-          projectId: classification === "PROJECT" ? qs("#f-projectId").value : undefined,
-          note: qs("#f-note").value.trim() || undefined,
-          changedBy: state.changedBy || undefined,
-        }),
+      await gasApi("createDateRule", {
+        semesterId: state.semesterId,
+        date: qs("#f-date").value,
+        personId: exact.id,
+        periodCode: qs("#f-periodCode").value,
+        overrideClassification: classification,
+        projectId: classification === "PROJECT" ? qs("#f-projectId").value : undefined,
+        note: qs("#f-note").value.trim() || undefined,
+        changedBy: state.changedBy || undefined,
       });
       closeModal();
       await loadDateRules();
@@ -710,10 +704,10 @@ function buildCalendarGrid(days) {
 
 async function loadCalendar() {
   if (!state.semesterId || !state.calendarYear || !state.calendarMonth) return;
-  const params = `semesterId=${state.semesterId}&year=${state.calendarYear}&month=${state.calendarMonth}`;
+  const calendarPayload = { semesterId: state.semesterId, year: state.calendarYear, month: state.calendarMonth };
   const [days, summary] = await Promise.all([
-    api(`/api/calendar?${params}`),
-    api(`/api/calendar/summary?${params}`),
+    gasApi("listCalendarDays", calendarPayload),
+    gasApi("calendarSummary", calendarPayload),
   ]);
 
   const cells = buildCalendarGrid(days);
@@ -772,14 +766,12 @@ function openCalendarDayForm(day) {
   qs("#f-cancel").addEventListener("click", closeModal);
   qs("#f-submit").addEventListener("click", async () => {
     try {
-      await api(`/api/calendar/${day.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          isTeachingDay: qs("#f-isTeachingDay").checked,
-          note: qs("#f-note").value.trim(),
-          changedBy: state.changedBy || undefined,
-          reason: "透過管理介面修改上課日狀態",
-        }),
+      await gasApi("updateCalendarDay", {
+        id: day.id,
+        isTeachingDay: qs("#f-isTeachingDay").checked,
+        note: qs("#f-note").value.trim(),
+        changedBy: state.changedBy || undefined,
+        reason: "透過管理介面修改上課日狀態",
       });
       closeModal();
       await loadCalendar();
@@ -812,6 +804,10 @@ function setupImportPeriodOptions() {
 // 步驟一：上傳前先讓管理者看到這份 Excel 有哪些工作表，選擇要匯入哪一個。
 // 真實的公費代課 Excel 通常同時包含教師代碼對照表、編制內/外明細、給出納彙總等多個
 // 工作表，不能假設固定是第一個，也不能把「給出納」這種已彙總結果的工作表當原始資料匯入。
+//
+// GAS 沒有 exceljs，這一步（讀取二進位、列出工作表）改在瀏覽器用 SheetJS 做
+// （見 excelImport.js），讀出來的 workbook 物件先存在 state，下一步直接複用，
+// 不用重新讀檔。
 async function inspectImportFile() {
   const fileInput = qs("#importFile");
   if (!fileInput.files || fileInput.files.length === 0) {
@@ -823,16 +819,13 @@ async function inspectImportFile() {
     return;
   }
 
-  const formData = new FormData();
-  formData.append("file", fileInput.files[0]);
-
   let sheets;
   try {
-    const res = await fetch("/api/monthly-imports/inspect", { method: "POST", body: formData });
-    sheets = await res.json();
-    if (!res.ok) throw new Error(sheets.error || "讀取 Excel 失敗");
+    state.importFile = fileInput.files[0];
+    state.importWorkbook = await readWorkbookFromFile(state.importFile);
+    sheets = listWorkbookSheetsFromWorkbook(state.importWorkbook).map((s) => ({ ...s, suggestedStaffType: suggestStaffTypeFromSheetName(s.name) }));
   } catch (err) {
-    alert(err.message);
+    alert(err.message || "讀取 Excel 失敗");
     return;
   }
 
@@ -850,31 +843,30 @@ async function inspectImportFile() {
   applySuggestion();
 }
 
-// 步驟二：實際上傳並匯入指定的工作表
+// 步驟二：解析選定的工作表（瀏覽器端），把結果 POST 給 GAS 的 importSubstituteRows action
 async function uploadImportFile() {
-  const fileInput = qs("#importFile");
   const sheetName = qs("#importSheetSelect").value;
-  if (!fileInput.files || fileInput.files.length === 0 || !sheetName) {
+  if (!state.importWorkbook || !sheetName) {
     alert("請先完成上一步的工作表選擇");
     return;
   }
 
-  const formData = new FormData();
-  formData.append("file", fileInput.files[0]);
-  formData.append("semesterId", state.semesterId);
-  formData.append("year", String(state.importPeriod.year));
-  formData.append("month", String(state.importPeriod.month));
-  formData.append("sheetName", sheetName);
-  formData.append("sourceStaffType", qs("#importStaffTypeSelect").value);
-  if (state.changedBy) formData.append("changedBy", state.changedBy);
-
   let result;
   try {
-    const res = await fetch("/api/monthly-imports", { method: "POST", body: formData });
-    result = await res.json();
-    if (!res.ok) throw new Error(result.error || "匯入失敗");
+    const { headers, rows } = extractSheetRows(state.importWorkbook, sheetName);
+    result = await gasApi("importSubstituteRows", {
+      semesterId: state.semesterId,
+      year: state.importPeriod.year,
+      month: state.importPeriod.month,
+      fileName: state.importFile.name,
+      sheetName,
+      sourceStaffType: qs("#importStaffTypeSelect").value,
+      importedBy: state.changedBy || undefined,
+      rows,
+      detectedHeaders: headers,
+    });
   } catch (err) {
-    alert(err.message);
+    alert(err.message || "匯入失敗");
     return;
   }
 
@@ -907,7 +899,7 @@ function renderImportResult(result) {
 }
 
 async function loadUnmatchedForImport(importId) {
-  const unmatched = await api(`/api/monthly-imports/${importId}/unmatched`);
+  const unmatched = await gasApi("listUnmatchedTeacherReferences", { id: importId });
   const section = qs("#importUnmatchedSection");
   if (unmatched.length === 0) {
     section.hidden = true;
@@ -938,10 +930,7 @@ async function loadUnmatchedForImport(importId) {
         alert("請先選擇要配對的人員（若清單是空的，請先到人員管理新增這位教師）");
         return;
       }
-      await api(`/api/substitute-records/${tr.dataset.recordId}/resolve-teacher`, {
-        method: "POST",
-        body: JSON.stringify({ field: tr.dataset.field, personId, changedBy: state.changedBy || undefined }),
-      });
+      await gasApi("resolveTeacherReference", { id: tr.dataset.recordId, field: tr.dataset.field, personId, changedBy: state.changedBy || undefined });
       await loadUnmatchedForImport(importId);
     })
   );
@@ -949,7 +938,7 @@ async function loadUnmatchedForImport(importId) {
 
 async function loadImportBatches() {
   if (!state.semesterId) return;
-  const batches = await api(`/api/monthly-imports?semesterId=${state.semesterId}`);
+  const batches = await gasApi("listMonthlyImports", { semesterId: state.semesterId });
   const tbody = qs("#importBatchTable tbody");
   tbody.innerHTML = batches
     .map(
@@ -971,7 +960,7 @@ async function loadImportBatches() {
 
   tbody.querySelectorAll("button[data-action='view']").forEach((btn) =>
     btn.addEventListener("click", async () => {
-      const detail = await api(`/api/monthly-imports/${btn.dataset.id}`);
+      const detail = await gasApi("getMonthlyImportDetail", { id: btn.dataset.id });
       state.currentImportId = detail.id;
       renderImportResult({
         monthlyImport: detail,
@@ -992,7 +981,7 @@ async function loadImportBatches() {
 
 async function setupClassificationBatchOptions() {
   if (!state.semesterId) return;
-  const batches = await api(`/api/monthly-imports?semesterId=${state.semesterId}`);
+  const batches = await gasApi("listMonthlyImports", { semesterId: state.semesterId });
   const select = qs("#classificationBatchSelect");
   select.innerHTML = batches
     .map(
@@ -1013,17 +1002,17 @@ async function loadClassificationPreview() {
     qs("#classificationTable tbody").innerHTML = "";
     return;
   }
-  const params = new URLSearchParams();
+  const previewPayload = { id: state.classificationBatchId };
   const fundingSource = qs("#filterFundingSource").value;
   const classificationMethod = qs("#filterClassificationMethod").value;
   const isManuallyModified = qs("#filterManualOverride").value;
   const staffType = qs("#filterStaffType").value;
-  if (fundingSource) params.set("fundingSource", fundingSource);
-  if (classificationMethod) params.set("classificationMethod", classificationMethod);
-  if (isManuallyModified) params.set("isManuallyModified", isManuallyModified);
-  if (staffType) params.set("staffType", staffType);
+  if (fundingSource) previewPayload.fundingSource = fundingSource;
+  if (classificationMethod) previewPayload.classificationMethod = classificationMethod;
+  if (isManuallyModified) previewPayload.isManuallyModified = isManuallyModified;
+  if (staffType) previewPayload.staffType = staffType;
 
-  const records = await api(`/api/monthly-imports/${state.classificationBatchId}/classification-preview?${params.toString()}`);
+  const records = await gasApi("listClassificationPreview", previewPayload);
   const tbody = qs("#classificationTable tbody");
   tbody.innerHTML = records
     .map((r) => {
@@ -1068,10 +1057,7 @@ async function loadClassificationPreview() {
       const reason = prompt("復原原因：");
       if (!reason) return;
       try {
-        await api(`/api/substitute-records/${id}/revert-classification`, {
-          method: "POST",
-          body: JSON.stringify({ changedBy: state.changedBy || undefined, reason }),
-        });
+        await gasApi("revertToAutoClassification", { id, changedBy: state.changedBy || undefined, reason });
         await loadClassificationPreview();
       } catch (err) {
         alert(err.message);
@@ -1107,14 +1093,12 @@ function openOverrideClassificationForm(record) {
       const fundingSource = qs("#f-fundingSource").value;
       const reason = qs("#f-reason").value.trim();
       if (!reason) throw new Error("請填寫覆寫原因");
-      await api(`/api/substitute-records/${record.id}/override-classification`, {
-        method: "POST",
-        body: JSON.stringify({
-          fundingSource,
-          projectId: fundingSource === "PROJECT" ? qs("#f-projectId").value : undefined,
-          changedBy: state.changedBy || undefined,
-          reason,
-        }),
+      await gasApi("overrideClassification", {
+        id: record.id,
+        fundingSource,
+        projectId: fundingSource === "PROJECT" ? qs("#f-projectId").value : undefined,
+        changedBy: state.changedBy || undefined,
+        reason,
       });
       closeModal();
       await loadClassificationPreview();
@@ -1129,7 +1113,7 @@ function openOverrideClassificationForm(record) {
 async function loadFeeRules() {
   if (!state.semesterId) return;
   const feeType = qs("#feeRuleTypeSelect").value;
-  const rules = await api(`/api/fee-rules?semesterId=${state.semesterId}&feeType=${feeType}`);
+  const rules = await gasApi("getFeeRuleHistory", { semesterId: state.semesterId, feeType });
   const today = new Date().toISOString().slice(0, 10);
   const tbody = qs("#feeRuleTable tbody");
   tbody.innerHTML = rules
@@ -1155,10 +1139,7 @@ async function loadFeeRules() {
       const endDate = prompt("請輸入停用日期（YYYY-MM-DD），此日期之後這筆費率就不再生效：");
       if (!endDate) return;
       try {
-        await api(`/api/fee-rules/${id}/deactivate`, {
-          method: "POST",
-          body: JSON.stringify({ endDate, changedBy: state.changedBy || undefined, reason: "透過管理介面停用" }),
-        });
+        await gasApi("deactivateFeeRule", { id, endDate, changedBy: state.changedBy || undefined, reason: "透過管理介面停用" });
         await loadFeeRules();
       } catch (err) {
         alert(err.message);
@@ -1188,17 +1169,14 @@ function openFeeRuleForm() {
       const effectiveDate = qs("#f-effectiveDate").value;
       if (!amount) throw new Error("請輸入金額");
       if (!effectiveDate) throw new Error("請輸入生效日期");
-      await api("/api/fee-rules", {
-        method: "POST",
-        body: JSON.stringify({
-          semesterId: state.semesterId,
-          feeType,
-          amount,
-          effectiveDate,
-          endDate: qs("#f-endDate").value || undefined,
-          note: qs("#f-note").value.trim() || undefined,
-          changedBy: state.changedBy || undefined,
-        }),
+      await gasApi("createFeeRule", {
+        semesterId: state.semesterId,
+        feeType,
+        amount,
+        effectiveDate,
+        endDate: qs("#f-endDate").value || undefined,
+        note: qs("#f-note").value.trim() || undefined,
+        changedBy: state.changedBy || undefined,
       });
       closeModal();
       await loadFeeRules();
@@ -1233,7 +1211,7 @@ async function runFeeCalculation() {
   msgEl.hidden = false;
   msgEl.textContent = "計算中…";
 
-  const batches = await api(`/api/monthly-imports?semesterId=${state.semesterId}`);
+  const batches = await gasApi("listMonthlyImports", { semesterId: state.semesterId });
   const targetBatches = batches.filter(
     (b) => b.year === state.feeCalcPeriod.year && b.month === state.feeCalcPeriod.month && b.status === "ACTIVE"
   );
@@ -1244,14 +1222,11 @@ async function runFeeCalculation() {
   }
 
   for (const b of targetBatches) {
-    await api(`/api/monthly-imports/${b.id}/calculate-fees`, {
-      method: "POST",
-      body: JSON.stringify({ changedBy: state.changedBy || undefined }),
-    });
+    await gasApi("calculateMonthlyImportFees", { id: b.id, changedBy: state.changedBy || undefined });
   }
 
-  const ids = targetBatches.map((b) => b.id).join(",");
-  const summary = await api(`/api/monthly-imports/fee-summary?ids=${ids}`);
+  const ids = targetBatches.map((b) => b.id);
+  const summary = await gasApi("summarizeTeacherMonthlyFees", { monthlyImportIds: ids });
   msgEl.textContent = `已計算 ${targetBatches.length} 個批次，共 ${summary.length} 位代課教師有金額紀錄。`;
 
   const totalAmount = summary.reduce((s, r) => s + Number(r.totalAmount), 0);
@@ -1261,7 +1236,7 @@ async function runFeeCalculation() {
   const projectAmount = summary.reduce((s, r) => s + Number(r.projectAmount), 0);
   let selfFundedTotal = 0;
   try {
-    const selfFundedRecords = await api(`/api/self-funded?semesterId=${state.semesterId}&year=${state.feeCalcPeriod.year}&month=${state.feeCalcPeriod.month}`);
+    const selfFundedRecords = await gasApi("listSelfFunded", { semesterId: state.semesterId, year: state.feeCalcPeriod.year, month: state.feeCalcPeriod.month });
     selfFundedTotal = selfFundedRecords.reduce((s, r) => s + Number(r.amount ?? 0), 0);
   } catch (err) {
     // 自費代課資料讀取失敗不影響公費費用計算本身，安靜略過即可
@@ -1327,7 +1302,7 @@ function setupClosePeriodOptions() {
 
 async function getActiveBatchIdsForClosePeriod() {
   if (!state.semesterId || !state.closePeriod) return [];
-  const batches = await api(`/api/monthly-imports?semesterId=${state.semesterId}`);
+  const batches = await gasApi("listMonthlyImports", { semesterId: state.semesterId });
   return batches
     .filter((b) => b.year === state.closePeriod.year && b.month === state.closePeriod.month && b.status === "ACTIVE")
     .map((b) => b.id);
@@ -1338,7 +1313,7 @@ async function getActiveBatchIdsForClosePeriod() {
 async function loadDashboard() {
   if (!state.semesterId || !state.closePeriod) return;
   const { year, month } = state.closePeriod;
-  const dashboard = await api(`/api/monthly-dashboard?semesterId=${state.semesterId}&year=${year}&month=${month}`);
+  const dashboard = await gasApi("getMonthlyDashboard", { semesterId: state.semesterId, year, month });
   renderDashboard(dashboard);
 }
 
@@ -1454,7 +1429,7 @@ async function loadHistoryTable() {
   const months = monthRange(semester.startDate, semester.endDate);
   const results = await Promise.all(
     months.map((m) =>
-      api(`/api/monthly-dashboard?semesterId=${state.semesterId}&year=${m.year}&month=${m.month}`)
+      gasApi("getMonthlyDashboard", { semesterId: state.semesterId, year: m.year, month: m.month })
         .then((dashboard) => ({ ...m, dashboard }))
         .catch(() => ({ ...m, dashboard: null }))
     )
@@ -1516,10 +1491,7 @@ function openLockForm() {
     try {
       const lockedBy = qs("#f-lockedBy").value.trim();
       if (!lockedBy) throw new Error("請輸入操作人");
-      await api("/api/monthly-lock/lock", {
-        method: "POST",
-        body: JSON.stringify({ semesterId: state.semesterId, year: state.closePeriod.year, month: state.closePeriod.month, lockedBy }),
-      });
+      await gasApi("lockMonth", { semesterId: state.semesterId, year: state.closePeriod.year, month: state.closePeriod.month, lockedBy });
       closeModal();
       await loadDashboard();
       await loadHistoryTable();
@@ -1547,10 +1519,7 @@ function openUnlockForm() {
       const reason = qs("#f-reason").value.trim();
       if (!unlockedBy) throw new Error("請輸入操作人");
       if (!reason) throw new Error("請輸入解鎖理由");
-      await api("/api/monthly-lock/unlock", {
-        method: "POST",
-        body: JSON.stringify({ semesterId: state.semesterId, year: state.closePeriod.year, month: state.closePeriod.month, unlockedBy, reason }),
-      });
+      await gasApi("unlockMonth", { semesterId: state.semesterId, year: state.closePeriod.year, month: state.closePeriod.month, unlockedBy, reason });
       closeModal();
       await loadDashboard();
       await loadHistoryTable();
@@ -1565,7 +1534,7 @@ function openUnlockForm() {
 async function loadPendingIssues() {
   if (!state.semesterId || !state.closePeriod) return;
   const { year, month } = state.closePeriod;
-  state.pendingIssuesCache = await api(`/api/pending-issues?semesterId=${state.semesterId}&year=${year}&month=${month}`);
+  state.pendingIssuesCache = await gasApi("listPendingIssues", { semesterId: state.semesterId, year, month });
   renderPendingIssues();
 }
 
@@ -1612,10 +1581,7 @@ function renderPendingIssues() {
       const idx = Number(e.target.closest("tr").dataset.idx);
       const issue = issues[idx];
       try {
-        await api("/api/issue-acknowledgements/revoke", {
-          method: "POST",
-          body: JSON.stringify({ targetTable: issue.targetTable, targetId: issue.targetId, changedBy: state.changedBy || undefined }),
-        });
+        await gasApi("revokeAcknowledgement", { targetTable: issue.targetTable, targetId: issue.targetId, changedBy: state.changedBy || undefined });
         await loadPendingIssues();
       } catch (err) {
         alert(err.message);
@@ -1644,17 +1610,14 @@ function openAcknowledgeForm(issue) {
       const reason = qs("#f-reason").value.trim();
       if (!acknowledgedBy) throw new Error("請輸入確認人");
       if (!reason) throw new Error("請輸入確認理由");
-      await api("/api/issue-acknowledgements", {
-        method: "POST",
-        body: JSON.stringify({
-          semesterId: state.semesterId,
-          year: state.closePeriod.year,
-          month: state.closePeriod.month,
-          targetTable: issue.targetTable,
-          targetId: issue.targetId,
-          reason,
-          acknowledgedBy,
-        }),
+      await gasApi("acknowledgeIssue", {
+        semesterId: state.semesterId,
+        year: state.closePeriod.year,
+        month: state.closePeriod.month,
+        targetTable: issue.targetTable,
+        targetId: issue.targetId,
+        reason,
+        acknowledgedBy,
       });
       closeModal();
       await loadPendingIssues();
@@ -1669,7 +1632,7 @@ function openAcknowledgeForm(issue) {
 async function loadSelfFunded() {
   if (!state.semesterId || !state.closePeriod) return;
   const { year, month } = state.closePeriod;
-  const records = await api(`/api/self-funded?semesterId=${state.semesterId}&year=${year}&month=${month}`);
+  const records = await gasApi("listSelfFunded", { semesterId: state.semesterId, year, month });
   const tbody = qs("#selfFundedTable tbody");
   tbody.innerHTML = records
     .map(
@@ -1704,10 +1667,7 @@ async function loadSelfFunded() {
       const reason = prompt("刪除原因（必填）：");
       if (!reason) return;
       try {
-        await api(`/api/self-funded/${id}`, {
-          method: "DELETE",
-          body: JSON.stringify({ deletedBy: state.changedBy || undefined, reason }),
-        });
+        await gasApi("deleteSelfFunded", { id, deletedBy: state.changedBy || undefined, reason });
         await loadSelfFunded();
       } catch (err) {
         alert(err.message);
@@ -1718,7 +1678,7 @@ async function loadSelfFunded() {
 
 async function findPersonByExactName(name) {
   if (!name) return null;
-  const matches = await api(`/api/persons?search=${encodeURIComponent(name)}`);
+  const matches = await gasApi("listPersons", { search: name });
   return matches.find((p) => p.name === name) || null;
 }
 
@@ -1774,20 +1734,14 @@ function openSelfFundedForm(existing) {
       };
 
       if (existing) {
-        await api(`/api/self-funded/${existing.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ ...payload, updatedBy: state.changedBy || undefined }),
-        });
+        await gasApi("updateSelfFunded", { ...payload, id: existing.id, updatedBy: state.changedBy || undefined });
       } else {
-        await api("/api/self-funded", {
-          method: "POST",
-          body: JSON.stringify({
-            ...payload,
-            semesterId: state.semesterId,
-            year: state.closePeriod.year,
-            month: state.closePeriod.month,
-            createdBy: state.changedBy || undefined,
-          }),
+        await gasApi("createSelfFunded", {
+          ...payload,
+          semesterId: state.semesterId,
+          year: state.closePeriod.year,
+          month: state.closePeriod.month,
+          createdBy: state.changedBy || undefined,
         });
       }
       closeModal();
@@ -1808,7 +1762,7 @@ async function loadChuna() {
     qs("#chunaContent").innerHTML = "<p>這個年月沒有有效的匯入批次，請先到「公費代課匯入」上傳。</p>";
     return;
   }
-  const summary = await api(`/api/chuna-summary?ids=${ids.join(",")}`);
+  const summary = await gasApi("getChunaSummary", { monthlyImportIds: ids });
   renderChuna(summary);
 }
 
@@ -1862,6 +1816,24 @@ function renderChuna(summary) {
   qs("#chunaContent").innerHTML = html || "<p>這個年月目前沒有可以彙總的資料。</p>";
 }
 
+// GAS 沒有 exceljs，無法直接產生 .xlsx 二進位回傳給瀏覽器下載。改用「GAS 端建立
+// 暫存 Google Sheet → 匯出成 xlsx → base64 編碼回傳」（見 gas/Chuna.gs
+// api_generateChunaExcel()），這裡負責把 base64 解碼成 Blob 觸發瀏覽器下載。
+function downloadBase64File(base64, fileName, mimeType) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function exportChuna() {
   if (!state.semesterId || !state.closePeriod) return;
   const ids = state.chunaBatchIds.length > 0 ? state.chunaBatchIds : await getActiveBatchIdsForClosePeriod();
@@ -1869,8 +1841,18 @@ async function exportChuna() {
     alert("這個年月沒有有效的匯入批次");
     return;
   }
-  const url = `/api/chuna-export?ids=${ids.join(",")}&year=${state.closePeriod.year}&month=${state.closePeriod.month}`;
-  window.location.href = url;
+  const btn = qs("#btnExportChuna");
+  btn.disabled = true;
+  btn.textContent = "產生中…";
+  try {
+    const result = await gasApi("generateChunaExcel", { monthlyImportIds: ids, year: state.closePeriod.year, month: state.closePeriod.month });
+    downloadBase64File(result.base64, result.fileName, result.mimeType);
+  } catch (err) {
+    alert(err.message || "下載失敗");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⬇ 下載 Excel";
+  }
 }
 
 // ---------- Implementation Batch：對帳 ----------
@@ -1888,17 +1870,16 @@ async function runReconciliation() {
     return;
   }
 
-  const formData = new FormData();
-  formData.append("file", fileInput.files[0]);
-  formData.append("ids", ids.join(","));
-
+  // GAS 沒有 exceljs，無法在後端解析上傳的 Excel 二進位，改成跟公費匯入一樣的做法：
+  // 瀏覽器用 SheetJS 解析成 [{name, periodCount, amount}]，再把解析結果 POST 給
+  // GAS 的 reconcile action，後端只做比對本身（見 gas/Chuna.gs parseUploadedChunaWorkbook 註解）。
   let result;
   try {
-    const res = await fetch("/api/reconciliation", { method: "POST", body: formData });
-    result = await res.json();
-    if (!res.ok) throw new Error(result.error || "比對失敗");
+    const workbook = await readWorkbookFromFile(fileInput.files[0]);
+    const uploadedRows = parseUploadedChunaWorkbook(workbook);
+    result = await gasApi("reconcile", { monthlyImportIds: ids, uploadedRows, changedBy: state.changedBy || undefined });
   } catch (err) {
-    alert(err.message);
+    alert(err.message || "比對失敗");
     return;
   }
   renderReconciliation(result);
