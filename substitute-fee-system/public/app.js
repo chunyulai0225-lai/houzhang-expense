@@ -10,6 +10,8 @@
 const GAS_BASE_URL = "https://script.google.com/macros/s/AKfycbzbXaAfIB-o4ZNdyO65OQ2Fkm29oRVA_PPrBYHFTCWNmhzbX2Di9qfWw_qgJ96U1Sfd/exec";
 
 const WEEKDAY_LABEL = { MON: "星期一", TUE: "星期二", WED: "星期三", THU: "星期四", FRI: "星期五" };
+const SEMESTER_STATUS_LABEL = { NOT_STARTED: "尚未使用", ACTIVE: "使用中", INACTIVE: "已停用" };
+const OVERTIME_MATCH_MODE_LABEL = { TEACHER_WEEKDAY_PERIOD: "教師＋星期＋節次", TEACHER_WEEKDAY_PERIOD_SUBJECT: "教師＋星期＋節次＋科目" };
 const CLASSIFICATION_LABEL = { GENERAL: "一般公費", OVERTIME: "超鐘點", PROJECT: "專案" };
 const STAFF_TYPE_LABEL = { BD: "編制內(BD)", NON_BD: "編制外(非BD)", UNKNOWN: "未指定" };
 const FUNDING_SOURCE_LABEL = { GENERAL: "一般公費", OVERTIME: "超鐘點", PROJECT: "專案", UNDETERMINED: "待確認" };
@@ -50,6 +52,7 @@ const PAGE_TITLES = {
   selfFunded: "💵 自費代課",
   reconciliation: "📊 對帳",
   chuna: "🧾 給出納",
+  semesters: "⚙️ 基本設定／學期管理",
   feeRules: "⚙️ 基本設定／費用規則",
   projects: "⚙️ 基本設定／專案",
   weekly: "⚙️ 基本設定／每週固定規則",
@@ -235,22 +238,46 @@ async function init() {
   qs("#btnExportChuna").addEventListener("click", exportChuna);
   qs("#btnRunReconciliation").addEventListener("click", runReconciliation);
 
-  const semesters = await gasApi("listSemesters");
-  state.semesters = semesters;
-  const select = qs("#semesterSelect");
-  select.innerHTML = semesters
-    .map((s) => `<option value="${s.id}">${s.schoolYear}學年度第${s.term}學期${s.isCurrent ? "（使用中）" : ""}</option>`)
-    .join("");
-  const current = semesters.find((s) => s.isCurrent) || semesters[0];
-  if (current) {
-    select.value = current.id;
-    state.semesterId = current.id;
-  }
-  updateSemesterBadge();
+  qs("#btnNewSemester").addEventListener("click", () => openSemesterForm());
+
+  await refreshSemesterList();
 
   state.periodSlots = await gasApi("listPeriodSlots");
 
   await loadForSemester();
+}
+
+// 右上角「學期」下拉選單只顯示「可用」的學期（尚未使用中 NOT_STARTED + 使用中 ACTIVE），
+// 已停用（INACTIVE）的學期不會出現在這裡——但仍然查得到歷史資料，只是不能再被選來操作。
+// 新增學期後這裡會立刻看到新學期（不用等到被設為目前使用才出現）。
+function renderSemesterSelect(semesters) {
+  const select = qs("#semesterSelect");
+  const selectable = semesters.filter((s) => s.status !== "INACTIVE");
+  const previousValue = select.value;
+  select.innerHTML = selectable
+    .map((s) => `<option value="${s.id}">${s.schoolYear}學年度第${s.term}學期${s.isCurrent ? "（使用中）" : ""}</option>`)
+    .join("");
+
+  const stillSelectable = selectable.some((s) => s.id === state.semesterId);
+  const current = selectable.find((s) => s.isCurrent) || selectable[0];
+  const chosen = stillSelectable ? state.semesterId : current ? current.id : null;
+  if (chosen) {
+    select.value = chosen;
+    state.semesterId = chosen;
+  } else if (previousValue) {
+    state.semesterId = null;
+  }
+  updateSemesterBadge();
+}
+
+// 重新抓一次 Semesters（新增/編輯/設為目前使用/停用/重新啟用之後都要呼叫這個，
+// 讓右上角選單跟「學期管理」頁面的表格同步更新，不用整頁重新整理）。
+async function refreshSemesterList() {
+  const semesters = await gasApi("listSemesters");
+  state.semesters = semesters;
+  renderSemesterSelect(semesters);
+  renderSemesterTable(semesters);
+  return semesters;
 }
 
 // 側邊欄上方的學期／年月標示：一進系統就先讓使用者確認「我現在在看哪個學期、現在是幾月」。
@@ -305,6 +332,143 @@ async function loadForSemester() {
   // 月結首頁是進站後第一眼看到的畫面，資料要在初始載入時就準備好，不能等使用者手動點分頁。
   await loadDashboard();
   await loadHistoryTable();
+}
+
+// ---------- 學期管理 ----------
+// 這裡管理的是「跨學期」的清單本身，不像其他基本設定分頁那樣被 state.semesterId 篩選過
+// （學期管理本來就是要同時看到所有學年度/學期，包含已停用的歷史學期）。
+
+function renderSemesterTable(semesters) {
+  const tbody = qs("#semesterTable tbody");
+  tbody.innerHTML = semesters
+    .map((s) => {
+      const canSetCurrent = s.status !== "INACTIVE" && !s.isCurrent;
+      const canDeactivate = s.status !== "INACTIVE";
+      const canActivate = s.status === "INACTIVE";
+      return `
+      <tr class="${s.status === "INACTIVE" ? "inactive-row" : ""}" data-id="${s.id}">
+        <td>${s.schoolYear}</td>
+        <td>第${s.term}學期</td>
+        <td>${SEMESTER_STATUS_LABEL[s.status] || s.status}</td>
+        <td>${dateOnly(s.startDate)}</td>
+        <td>${dateOnly(s.endDate)}</td>
+        <td>${s.isCurrent ? badge("ok", "🟢 使用中") : ""}</td>
+        <td>${OVERTIME_MATCH_MODE_LABEL[s.overtimeMatchMode] || s.overtimeMatchMode}</td>
+        <td>${s.note ?? ""}</td>
+        <td>
+          <button data-action="edit">編輯</button>
+          ${canSetCurrent ? `<button data-action="setCurrent">設為目前使用</button>` : ""}
+          ${canDeactivate ? `<button data-action="deactivate" class="danger">停用</button>` : ""}
+          ${canActivate ? `<button data-action="activate">重新啟用</button>` : ""}
+        </td>
+      </tr>`;
+    })
+    .join("");
+
+  tbody.querySelectorAll("button[data-action='edit']").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      openSemesterForm(semesters.find((s) => s.id === id));
+    })
+  );
+  tbody.querySelectorAll("button[data-action='setCurrent']").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      const s = semesters.find((s) => s.id === id);
+      if (!confirm(`確定要把「${s.schoolYear}學年度第${s.term}學期」設為目前使用中的學期嗎？其他學期會自動取消目前使用中狀態。`)) return;
+      try {
+        await gasApi("setCurrentSemester", { id, changedBy: state.changedBy || undefined });
+        await refreshSemesterList();
+        await loadForSemester();
+      } catch (err) {
+        alert(err.message);
+      }
+    })
+  );
+  tbody.querySelectorAll("button[data-action='deactivate']").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      const s = semesters.find((s) => s.id === id);
+      const confirmMsg = s.isCurrent
+        ? `「${s.schoolYear}學年度第${s.term}學期」目前是使用中的學期，停用後會立刻變成沒有任何學期是使用中狀態，確定要停用嗎？`
+        : `確定要停用「${s.schoolYear}學年度第${s.term}學期」嗎？停用後不會刪除資料，仍可查詢歷史紀錄。`;
+      if (!confirm(confirmMsg)) return;
+      const reason = prompt("停用原因（選填）：") || undefined;
+      try {
+        await gasApi("deactivateSemester", { id, changedBy: state.changedBy || undefined, reason });
+        await refreshSemesterList();
+        await loadForSemester();
+      } catch (err) {
+        alert(err.message);
+      }
+    })
+  );
+  tbody.querySelectorAll("button[data-action='activate']").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      try {
+        await gasApi("activateSemester", { id, changedBy: state.changedBy || undefined });
+        await refreshSemesterList();
+      } catch (err) {
+        alert(err.message);
+      }
+    })
+  );
+}
+
+function openSemesterForm(existing) {
+  const body = `
+    <h2>${existing ? "編輯" : "新增"}學期</h2>
+    <label>學年度<input id="f-schoolYear" type="number" step="1" min="1" value="${existing ? existing.schoolYear : ""}" /></label>
+    <label>學期<select id="f-term">
+      <option value="1" ${existing?.term === 1 ? "selected" : ""}>第1學期</option>
+      <option value="2" ${existing?.term === 2 ? "selected" : ""}>第2學期</option>
+    </select></label>
+    <label>開始日期<input id="f-startDate" type="date" value="${dateOnly(existing?.startDate) || ""}" /></label>
+    <label>結束日期<input id="f-endDate" type="date" value="${dateOnly(existing?.endDate) || ""}" /></label>
+    <label>加班比對模式<select id="f-overtimeMatchMode">
+      <option value="TEACHER_WEEKDAY_PERIOD_SUBJECT" ${!existing || existing.overtimeMatchMode === "TEACHER_WEEKDAY_PERIOD_SUBJECT" ? "selected" : ""}>教師＋星期＋節次＋科目（目前系統預設）</option>
+      <option value="TEACHER_WEEKDAY_PERIOD" ${existing?.overtimeMatchMode === "TEACHER_WEEKDAY_PERIOD" ? "selected" : ""}>教師＋星期＋節次</option>
+    </select></label>
+    <label>備註<textarea id="f-note">${existing?.note ?? ""}</textarea></label>
+    <div class="error-text" id="f-error" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="f-cancel">取消</button>
+      <button type="button" id="f-submit">儲存</button>
+    </div>`;
+  showModal(body);
+  qs("#f-cancel").addEventListener("click", closeModal);
+  qs("#f-submit").addEventListener("click", async () => {
+    try {
+      const schoolYear = qs("#f-schoolYear").value;
+      const startDate = qs("#f-startDate").value;
+      const endDate = qs("#f-endDate").value;
+      if (!schoolYear) throw new Error("請輸入學年度");
+      if (!startDate) throw new Error("請填寫開始日期");
+      if (!endDate) throw new Error("請填寫結束日期");
+
+      const payload = {
+        schoolYear: Number(schoolYear),
+        term: Number(qs("#f-term").value),
+        startDate,
+        endDate,
+        overtimeMatchMode: qs("#f-overtimeMatchMode").value,
+        note: qs("#f-note").value.trim() || undefined,
+        changedBy: state.changedBy || undefined,
+      };
+
+      if (existing) {
+        await gasApi("updateSemester", { ...payload, id: existing.id, reason: "透過管理介面修改" });
+      } else {
+        await gasApi("createSemester", payload);
+      }
+      closeModal();
+      await refreshSemesterList();
+      await loadForSemester();
+    } catch (err) {
+      showFormError(err.message);
+    }
+  });
 }
 
 // ---------- 每週固定規則 ----------

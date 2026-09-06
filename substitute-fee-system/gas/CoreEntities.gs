@@ -9,7 +9,24 @@
  * fetch 的目標。
  */
 
-// ---------- 學期／人員／節次代碼 ----------
+// ---------- 學期管理 ----------
+// 學期狀態是一個小狀態機，三個值：
+//   NOT_STARTED（已建立、尚未被設為目前使用）── 新增學期的預設狀態
+//   ACTIVE     （目前使用中）── 只透過 api_setCurrentSemester() 進入，isCurrent 必為 true
+//   INACTIVE   （已停用）── 只透過 api_deactivateSemester() 進入，isCurrent 必為 false
+// isCurrent 全系統只允許同時一個 true，唯一改變它的地方是 api_setCurrentSemester()；
+// 新增／編輯／停用／重新啟用都不會把 isCurrent 改成 true，避免意外造成兩個 current。
+// 「重新啟用」只是把 INACTIVE 解除回 NOT_STARTED（可以再被設為目前使用），
+// 不會自動變成目前使用中——那一定要管理者另外明確按「設為目前使用」。
+
+function hydrateSemester(r) {
+  return {
+    id: r.id, schoolYear: Number(r.schoolYear), term: Number(r.term), status: r.status,
+    isCurrent: toBool(r.isCurrent),
+    startDate: r.startDate, endDate: r.endDate, overtimeMatchMode: r.overtimeMatchMode,
+    note: r.note || "", createdAt: r.createdAt, updatedAt: r.updatedAt,
+  };
+}
 
 function api_listSemesters() {
   var rows = readRows("Semesters").map(stripRow);
@@ -17,15 +34,146 @@ function api_listSemesters() {
     if (a.schoolYear !== b.schoolYear) return Number(b.schoolYear) - Number(a.schoolYear);
     return Number(b.term) - Number(a.term);
   });
-  return rows.map(function (r) {
-    return {
-      id: r.id, schoolYear: Number(r.schoolYear), term: Number(r.term), status: r.status,
-      isCurrent: r.isCurrent === true || r.isCurrent === "TRUE" || r.isCurrent === "true",
-      startDate: r.startDate, endDate: r.endDate, overtimeMatchMode: r.overtimeMatchMode,
-      note: r.note, createdAt: r.createdAt, updatedAt: r.updatedAt,
-    };
-  });
+  return rows.map(hydrateSemester);
 }
+
+function validateSemesterTerm(term) {
+  var t = Number(term);
+  if (t !== 1 && t !== 2) throw new Error("學期只能是第1學期或第2學期");
+  return t;
+}
+
+// 對照 Node schema.prisma 的 @@unique([schoolYear, term])：同一個學年度＋學期只能有一筆。
+function assertSemesterYearTermUnique(schoolYear, term, excludeId) {
+  var dup = findOne("Semesters", function (r) {
+    return Number(r.schoolYear) === schoolYear && Number(r.term) === term && r.id !== excludeId;
+  });
+  if (dup) throw new Error(schoolYear + "學年度第" + term + "學期已經存在，不能重複建立");
+}
+
+function validateOvertimeMatchMode(mode) {
+  if (mode !== "TEACHER_WEEKDAY_PERIOD" && mode !== "TEACHER_WEEKDAY_PERIOD_SUBJECT") {
+    throw new Error("加班比對模式只能是 TEACHER_WEEKDAY_PERIOD 或 TEACHER_WEEKDAY_PERIOD_SUBJECT");
+  }
+}
+
+function api_createSemester(payload) {
+  requireField(payload, "schoolYear", "學年度");
+  requireField(payload, "term", "學期");
+  requireField(payload, "startDate", "開始日期");
+  requireField(payload, "endDate", "結束日期");
+  var schoolYear = Number(payload.schoolYear);
+  var term = validateSemesterTerm(payload.term);
+  assertSemesterYearTermUnique(schoolYear, term, null);
+  var startDate = toDateOnly(payload.startDate);
+  var endDate = toDateOnly(payload.endDate);
+  validateDateRange(startDate, endDate);
+  // 目前系統實際在用的預設值是 SUBJECT（比對加班規則時同時比對科目），沒填的話就用這個，
+  // 但仍然是可以在新增/編輯時改成 TEACHER_WEEKDAY_PERIOD 的一般欄位，不是寫死的常數。
+  var overtimeMatchMode = payload.overtimeMatchMode || "TEACHER_WEEKDAY_PERIOD_SUBJECT";
+  validateOvertimeMatchMode(overtimeMatchMode);
+
+  var semester = {
+    id: newId(), schoolYear: schoolYear, term: term, status: "NOT_STARTED", isCurrent: false,
+    startDate: startDate, endDate: endDate, overtimeMatchMode: overtimeMatchMode,
+    note: payload.note || "", createdAt: nowIso(), updatedAt: nowIso(),
+  };
+  appendRow("Semesters", semester);
+  writeChangeLog("semesters", semester.id, null, null,
+    schoolYear + "學年度第" + term + "學期（" + startDate + " ~ " + endDate + "）",
+    payload.changedBy, payload.reason || "新增學期");
+  return hydrateSemester(semester);
+}
+
+// 可修改：學年度／學期／開始日期／結束日期／overtimeMatchMode／note。
+// 不可修改：id、createdAt。不會動 status／isCurrent —— 就算改的是目前使用中的學期，
+// 也不會因為編輯而自動取消 current（跟停用是兩件不同的事，只有 deactivate 會動 isCurrent）。
+function api_updateSemester(payload) {
+  requireField(payload, "id", "id");
+  var existing = findById("Semesters", payload.id);
+  if (!existing) throw new Error("找不到這個學期");
+
+  var patch = { updatedAt: nowIso() };
+  var nextSchoolYear = existing.schoolYear, nextTerm = existing.term;
+  if (payload.schoolYear !== undefined) { nextSchoolYear = Number(payload.schoolYear); patch.schoolYear = nextSchoolYear; }
+  if (payload.term !== undefined) { nextTerm = validateSemesterTerm(payload.term); patch.term = nextTerm; }
+  if (payload.schoolYear !== undefined || payload.term !== undefined) {
+    assertSemesterYearTermUnique(Number(nextSchoolYear), Number(nextTerm), existing.id);
+  }
+
+  var nextStartDate = existing.startDate, nextEndDate = existing.endDate;
+  if (payload.startDate !== undefined) { nextStartDate = toDateOnly(payload.startDate); patch.startDate = nextStartDate; }
+  if (payload.endDate !== undefined) { nextEndDate = toDateOnly(payload.endDate); patch.endDate = nextEndDate; }
+  if (payload.startDate !== undefined || payload.endDate !== undefined) {
+    validateDateRange(nextStartDate, nextEndDate);
+  }
+
+  if (payload.overtimeMatchMode !== undefined) {
+    validateOvertimeMatchMode(payload.overtimeMatchMode);
+    patch.overtimeMatchMode = payload.overtimeMatchMode;
+  }
+  if (payload.note !== undefined) patch.note = payload.note || "";
+
+  var updated = updateRow("Semesters", payload.id, patch);
+  writeChangeLog("semesters", payload.id, null,
+    existing.schoolYear + "學年度第" + existing.term + "學期（" + existing.startDate + " ~ " + existing.endDate + "）",
+    updated.schoolYear + "學年度第" + updated.term + "學期（" + updated.startDate + " ~ " + updated.endDate + "）",
+    payload.changedBy, payload.reason || "修改學期資料");
+  return hydrateSemester(updated);
+}
+
+// 設為目前使用：全系統同時只能有一個 isCurrent=true。
+// 1) 其他所有目前是 current 的學期，isCurrent 改 false；2) 指定學期 isCurrent 改 true；
+// 3) 指定學期 status 改 ACTIVE；4) 兩邊都寫 updatedAt；5) 每一筆被動到的學期都寫 ChangeLog。
+function api_setCurrentSemester(payload) {
+  requireField(payload, "id", "id");
+  var target = findById("Semesters", payload.id);
+  if (!target) throw new Error("找不到這個學期");
+
+  var previousCurrents = readRows("Semesters").filter(function (r) { return r.id !== payload.id && toBool(r.isCurrent); });
+  previousCurrents.forEach(function (r) {
+    updateRow("Semesters", r.id, { isCurrent: false, updatedAt: nowIso() });
+    writeChangeLog("semesters", r.id, "isCurrent", "true", "false", payload.changedBy,
+      payload.reason || ("改由 " + target.schoolYear + "學年度第" + target.term + "學期 設為目前使用"));
+  });
+
+  var updated = updateRow("Semesters", payload.id, { isCurrent: true, status: "ACTIVE", updatedAt: nowIso() });
+  writeChangeLog("semesters", payload.id, "isCurrent", "false", "true", payload.changedBy, payload.reason || "設為目前使用學期");
+  return hydrateSemester(updated);
+}
+
+// 停用：status=INACTIVE、isCurrent=false，不刪除資料，歷史紀錄查詢照常可以查到這筆學期。
+// 若停用的正是目前使用中的學期，前端會先跳出確認對話框，這裡仍然照樣執行（後端不重複擋，
+// 「確認」是操作流程上的一道關卡，不是資料規則本身）。
+function api_deactivateSemester(payload) {
+  requireField(payload, "id", "id");
+  var existing = findById("Semesters", payload.id);
+  if (!existing) throw new Error("找不到這個學期");
+  var wasCurrent = toBool(existing.isCurrent);
+
+  var updated = updateRow("Semesters", payload.id, { status: "INACTIVE", isCurrent: false, updatedAt: nowIso() });
+  writeChangeLog("semesters", payload.id, "status", existing.status, "INACTIVE", payload.changedBy,
+    payload.reason || (wasCurrent ? "停用目前使用中的學期" : "停用學期"));
+  if (wasCurrent) {
+    writeChangeLog("semesters", payload.id, "isCurrent", "true", "false", payload.changedBy, "停用學期，連帶取消目前使用中狀態");
+  }
+  return hydrateSemester(updated);
+}
+
+// 重新啟用：只解除 INACTIVE 狀態、回到 NOT_STARTED，不會自動變成目前使用中——
+// 要設回目前使用中，仍然要另外呼叫 api_setCurrentSemester()。
+function api_activateSemester(payload) {
+  requireField(payload, "id", "id");
+  var existing = findById("Semesters", payload.id);
+  if (!existing) throw new Error("找不到這個學期");
+  if (existing.status !== "INACTIVE") throw new Error("這個學期目前不是停用狀態，不需要重新啟用");
+
+  var updated = updateRow("Semesters", payload.id, { status: "NOT_STARTED", updatedAt: nowIso() });
+  writeChangeLog("semesters", payload.id, "status", "INACTIVE", "NOT_STARTED", payload.changedBy, payload.reason || "重新啟用學期");
+  return hydrateSemester(updated);
+}
+
+// ---------- 人員／節次代碼 ----------
 
 function getPersonRef(personId) {
   if (!personId) return null;

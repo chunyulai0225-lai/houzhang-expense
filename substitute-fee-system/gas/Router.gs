@@ -18,6 +18,11 @@
 var ACTIONS = {
   // ---- CoreEntities ----
   listSemesters: api_listSemesters,
+  createSemester: api_createSemester,
+  updateSemester: api_updateSemester,
+  setCurrentSemester: api_setCurrentSemester,
+  deactivateSemester: api_deactivateSemester,
+  activateSemester: api_activateSemester,
   listPersons: api_listPersons,
   listPeriodSlots: api_listPeriodSlots,
   listProjects: api_listProjects,
