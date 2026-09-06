@@ -1,0 +1,24 @@
+# Render Blueprint：一次建立網站服務 + PostgreSQL 資料庫，並自動把資料庫連線
+# 字串接到網站服務的 DATABASE_URL 環境變數，不需要手動複製貼上。
+#
+# 使用方式：到 https://dashboard.render.com/blueprints 選擇「New Blueprint Instance」，
+# 指定這個 GitHub repo，Render 會自動讀取這個檔案並建立好所有服務。
+services:
+  - type: web
+    name: substitute-fee-system
+    runtime: node
+    plan: free
+    rootDir: substitute-fee-system
+    buildCommand: npm install
+    startCommand: npm run start
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: substitute-fee-db
+          property: connectionString
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "1"
+
+databases:
+  - name: substitute-fee-db
+    plan: free
