@@ -70,8 +70,28 @@ function requireField(payload, field, label) {
 
 // 日期欄位一律用 "YYYY-MM-DD" 純文字存放／比對，不使用 Sheets 的日期序列值，
 // 避免跨時區造成「差一天」這種對代課紀錄來說致命的錯誤。
+//
+// 這裡刻意先檢查是不是原生 Date 物件／數字：使用者直接在 Google Sheets 手動輸入
+// 看起來像日期的內容時（例如既有的 115 學年度第1學期資料），即使之後對該欄位
+// 執行過 setNumberFormat("@") 改成純文字格式，Sheets 也不會回頭把已經存在的儲存格
+// 內容轉成字串——用 getValues() 讀出來仍然可能是 Date 物件（極少數情況是日期序列
+// 數字），不是 "YYYY-MM-DD" 字串。如果不先轉換，後面直接對它做字串串接／日期運算
+// 會產生 Invalid Date，後續依賴日期範圍的功能（例如產生學校上課日曆）就會整批算成
+// 0（迴圈的結束條件永遠是 false，一次都不會執行）。
+// 轉換時用 Utilities.formatDate() 搭配 Session.getScriptTimeZone()，而不是
+// toISOString()：後者一律轉成 UTC，遇到台灣（UTC+8）這種時區會有「差一天」的風險；
+// 用試算表腳本本身的時區格式化，才能還原使用者當初實際輸入的那個日期。
 function toDateOnly(isoOrDateLike) {
-  if (!isoOrDateLike) return null;
+  if (isoOrDateLike === null || isoOrDateLike === undefined || isoOrDateLike === "") return null;
+  if (isoOrDateLike instanceof Date) {
+    return Utilities.formatDate(isoOrDateLike, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  if (typeof isoOrDateLike === "number") {
+    // Google Sheets 的日期序列值：第 0 天是 1899-12-30。
+    var epochMs = Date.UTC(1899, 11, 30);
+    var asDate = new Date(epochMs + isoOrDateLike * 86400000);
+    return Utilities.formatDate(asDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
   if (/^\d{4}-\d{2}-\d{2}/.test(isoOrDateLike)) return isoOrDateLike.slice(0, 10);
   var d = new Date(isoOrDateLike);
   return d.toISOString().slice(0, 10);
