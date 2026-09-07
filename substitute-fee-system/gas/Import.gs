@@ -14,32 +14,59 @@ var DATE_PATTERN = /^(\d{1,2})[-\/](\d{1,2})(?:\((一|二|三|四|五|六|日)\)
 // 真實 2026/09 資料出現的日期「區間」格式，例如「09-11(五) 12:00 ~ 09-14(一) 16:00」——
 // 前後各是一個完整的「MM-DD(星期) HH:mm」，中間用 ~ 連接。這跟 DATE_PATTERN 本來就支援的
 // 「單日 + 同一天的起訖時間」（例如「6/18(四) 13:50 ~ 15:50」）是兩種不同的格式，
-// 不能混在同一個 pattern 裡，也不能假設區間裡每一天都要另外展開成一筆代課紀錄
-// （SubstituteRecord 一筆只對應一天一節，展開等於是系統自己猜測實際代課日，不允許）。
+// 不能混在同一個 pattern 裡。這種區間實際代表的是「原教師請假/出差的期間」，不是
+// 「要展開成好幾筆代課紀錄」——真正的代課節次與計費數量另外由「時數天數」欄位決定
+// （見下面 parseHoursOrDaysToPeriodCount()），這裡只需要把區間的起始日當成這筆
+// SubstituteRecord 的代課日期（單純作為日期欄位的定位點，不是用來推算實際代課日），
+// 不猜區間裡哪幾天才是真正代課日、也不會展開成多筆紀錄。
 var DATE_RANGE_PATTERN =
-  /^\d{1,2}[-\/]\d{1,2}(?:\((一|二|三|四|五|六|日)\))?\s*\d{1,2}:\d{2}\s*~\s*\d{1,2}[-\/]\d{1,2}(?:\((一|二|三|四|五|六|日)\))?\s*\d{1,2}:\d{2}$/;
+  /^(\d{1,2})[-\/](\d{1,2})(?:\((一|二|三|四|五|六|日)\))?\s*\d{1,2}:\d{2}\s*~\s*(\d{1,2})[-\/](\d{1,2})(?:\((一|二|三|四|五|六|日)\))?\s*\d{1,2}:\d{2}$/;
+
+function buildParsedDateFromParts(year, month, day, textWeekdayChar, expectedMonth) {
+  if (month < 1 || month > 12) return null;
+  var date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  var computedWeekday = WEEKDAY_BY_JS_INDEX[date.getUTCDay()];
+  var weekdayMismatch = Boolean(textWeekdayChar) && WEEKDAY_CHAR_MAP[textWeekdayChar] !== computedWeekday;
+  var monthMismatch = month !== expectedMonth;
+  return { date: date.toISOString().slice(0, 10), weekday: computedWeekday, weekdayMismatch: weekdayMismatch, monthMismatch: monthMismatch };
+}
 
 // 回傳三種結果之一：
-//   {date, weekday, weekdayMismatch, monthMismatch} —— 可以正常解析成單一天
-//   {isDateRange: true}                             —— 辨識出是日期「區間」，不是單一天
-//   {error}                                          —— 真的無法辨識
+//   {date, weekday, weekdayMismatch, monthMismatch, isDateRange?} —— 可以正常解析成一天
+//     （isDateRange 為 true 時，date/weekday 是「區間起始日」，只作為定位點使用）
+//   {error}                                                        —— 真的無法辨識
 function parseDateText(text, year, expectedMonth) {
   var trimmed = String(text).trim();
   var match = trimmed.match(DATE_PATTERN);
   if (!match) {
-    if (DATE_RANGE_PATTERN.test(trimmed)) return { isDateRange: true };
+    var rangeMatch = trimmed.match(DATE_RANGE_PATTERN);
+    if (rangeMatch) {
+      var startParsed = buildParsedDateFromParts(year, Number(rangeMatch[1]), Number(rangeMatch[2]), rangeMatch[3], expectedMonth);
+      if (!startParsed) return { error: '日期區間的起始日不合理："' + text + '"' };
+      startParsed.isDateRange = true;
+      return startParsed;
+    }
     return { error: '無法解析日期格式："' + text + '"，預期格式如 "06-18(四)" 或 "6/18(四) 13:50 ~ 15:50"' };
   }
   var month = Number(match[1]);
   var day = Number(match[2]);
   if (month < 1 || month > 12) return { error: '日期月份不合理："' + text + '"' };
-  var date = new Date(Date.UTC(year, month - 1, day));
-  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return { error: '日期不存在："' + text + '"' };
-  var computedWeekday = WEEKDAY_BY_JS_INDEX[date.getUTCDay()];
-  var textWeekdayChar = match[3];
-  var weekdayMismatch = Boolean(textWeekdayChar) && WEEKDAY_CHAR_MAP[textWeekdayChar] !== computedWeekday;
-  var monthMismatch = month !== expectedMonth;
-  return { date: date.toISOString().slice(0, 10), weekday: computedWeekday, weekdayMismatch: weekdayMismatch, monthMismatch: monthMismatch };
+  var parsed = buildParsedDateFromParts(year, month, day, match[3], expectedMonth);
+  if (!parsed) return { error: '日期不存在："' + text + '"' };
+  return parsed;
+}
+
+// 只認得「純日數」這種能安全、明確換算成一般代課節次計費數量的格式（例如「5日」
+// 「8日」「12日」）：時數天數是 N 天、搭配單一節次欄位，代表這個代課教師在請假／
+// 出差期間內每天都代同一節，共 N 次一般代課節次。混合單位（例如「3日4時」）或純
+// 時數（例如「6時」）目前沒有既有、明確又正確的換算規則，寧可回傳無法解析、
+// 讓呼叫端標記「待確認」，也不要自行推導、用錯誤的假設產生假的計費數字。
+function parseHoursOrDaysToPeriodCount(text) {
+  var trimmed = String(text || "").trim();
+  var match = trimmed.match(/^(\d+)日$/);
+  if (match) return { periodCount: Number(match[1]) };
+  return { error: true };
 }
 
 // 回傳三種結果之一：
@@ -137,18 +164,13 @@ function api_importSubstituteRows(payload) {
     var parsedDate = null;
     if (row.dateText) {
       var dr = parseDateText(row.dateText, Number(payload.year), Number(payload.month));
-      if (dr.isDateRange) {
-        // 日期是一個區間（例如「09-11(五) 12:00 ~ 09-14(一) 16:00」），不是無法解析——
-        // 但 SubstituteRecord 一筆只能對應一天一節，不能自己猜是哪一天、更不能展開成
-        // 區間內每一天都各建一筆。原始資料（RawRecord）照樣完整保留，只是不建立
-        // SubstituteRecord，並記錄成「待確認」，等管理者實際確認後改成單日日期重新登錄。
-        rowIssues.push({
-          rowNumber: row.rowNumber, fieldName: "日期",
-          message: '日期區間／待確認："' + row.dateText + '"：這是一個日期區間，不是單一天，系統不會自動判斷實際代課日、也不會展開成多筆紀錄，請人工確認實際日期後改用單日格式重新登錄',
-        });
-      } else if (dr.error) {
+      if (dr.error) {
         rowIssues.push({ rowNumber: row.rowNumber, fieldName: "日期", message: dr.error });
       } else {
+        // 日期可能是單一天，也可能是一個區間（例如「09-11(五) 12:00 ~ 09-14(一) 16:00」）——
+        // 兩者都視為可以正常解析，不會因為是區間就判定成錯誤或待確認；區間本身不會展開
+        // 成多筆紀錄，parsedDate.date 只是區間的起始日，作為這筆 SubstituteRecord 的
+        // 日期定位點使用（見 parseDateText 開頭說明）。
         parsedDate = dr;
       }
     }
@@ -170,6 +192,28 @@ function api_importSubstituteRows(payload) {
       }
     }
 
+    // 日期是「區間」、且節次是第一節～第七節時，這筆紀錄的計費數量（periodCount）
+    // 一律依「時數天數」欄位判斷（例如「5日」→5 個一般代課節次），不會、也不能從
+    // 日期區間本身推算出天數。目前只認得純日數格式（見 parseHoursOrDaysToPeriodCount
+    // 開頭說明），無法安全解析時（缺漏、或像「3日4時」這種混合單位）不猜測，保留
+    // RawRecord、標記「時數天數／待確認」，暫不建立 SubstituteRecord——跟日期區間
+    // 本身無關，不可以誤植成日期相關的錯誤訊息。單一日期的既有資料完全不受影響
+    // （periodCount 維持原本的空白，2026/06 迴歸不受任何影響）。
+    var periodCount = null;
+    if (parsedDate && parsedDate.isDateRange && periodCode && /^P[1-7]$/.test(periodCode)) {
+      var hd = parseHoursOrDaysToPeriodCount(row.hoursOrDaysText);
+      if (hd.error) {
+        rowIssues.push({
+          rowNumber: row.rowNumber, fieldName: "時數天數",
+          message: '時數天數／待確認：日期為區間（"' + row.dateText + '"），節次「' + periodCode + '」需要明確的「時數天數」才能確認計費數量，' +
+            (row.hoursOrDaysText ? '目前的文字："' + row.hoursOrDaysText + '"' : "目前欄位是空的") +
+            "不是系統目前能安全辨識的格式（僅支援如「5日」這種純日數），暫不建立代課紀錄，請人工確認後改用可辨識的格式重新登錄",
+        });
+      } else {
+        periodCount = hd.periodCount;
+      }
+    }
+
     if (rowIssues.length > 0 || !parsedDate || !periodCode) {
       issues = issues.concat(rowIssues);
       return;
@@ -178,12 +222,16 @@ function api_importSubstituteRows(payload) {
     var noteParts = [];
     if (parsedDate.weekdayMismatch) noteParts.push('日期文字標示的星期與實際計算不符（原始："' + row.dateText + '"）');
     if (parsedDate.monthMismatch) noteParts.push("此列日期月份與所選匯入月份（" + payload.month + "月）不同，請確認");
+    if (parsedDate.isDateRange) {
+      noteParts.push('日期原文為區間："' + row.dateText + '"，系統以區間起始日作為代課日期、不展開成多筆紀錄' +
+        (periodCount !== null ? "；計費數量依時數天數設為 " + periodCount : ""));
+    }
 
     recordRowsToInsert.push({
       id: newId(), rawRecordId: rawId, entryType: "EXCEL_IMPORT", monthlyImportId: monthlyImport.id,
       originalTeacherId: "", substituteTeacherId: "", date: parsedDate.date, weekday: parsedDate.weekday,
       periodCode: periodCode, className: row.className || "", subject: row.subject || "", leaveType: row.leaveType || "",
-      rawHoursOrDays: row.hoursOrDaysText || "", periodCount: "", staffType: sourceStaffType,
+      rawHoursOrDays: row.hoursOrDaysText || "", periodCount: periodCount === null ? "" : periodCount, staffType: sourceStaffType,
       fundingSource: "UNDETERMINED", projectId: "", unitPrice: "", amount: "",
       classificationMethod: "GENERAL_DEFAULT", classificationRuleId: "", classifiedAt: "",
       autoFundingSource: "", autoClassificationMethod: "", autoClassificationRuleId: "", autoProjectId: "",
