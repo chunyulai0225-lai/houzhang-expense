@@ -4,9 +4,22 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>代課費管理系統</title>
-<link rel="stylesheet" href="style.css" />
+<!-- 這個專案沒有建置流程，app.js/style.css 的網址永遠不變，瀏覽器／GitHub Pages
+     的 CDN 很容易在部署新版本後繼續快取舊檔案，導致「HTML 有新按鈕、JS 卻還是
+     舊版、按了沒反應」。用 ?v= 版本號手動 cache-busting：每次 app.js 或 style.css
+     內容有變動時，把下面所有 ?v= 的值一起更新（例如今天的日期＋序號），確保瀏覽器
+     一定會重新抓取，不要只改其中一個檔案的版本號。 -->
+<link rel="stylesheet" href="style.css?v=20260907a" />
 </head>
 <body>
+  <!-- 任何按鈕點了「完全沒反應」通常是某個未預期的例外被瀏覽器默默吞掉，
+       使用者只會看到畫面沒變化，很難回報／排查。這個橫幅由 app.js 的
+       window.onerror / unhandledrejection 監聽器控制，任何沒有被個別功能自己
+       catch 住的錯誤都會顯示在這裡，確保「按了沒反應」不會再是無法診斷的黑箱。 -->
+  <div id="globalErrorBanner" class="global-error-banner" hidden>
+    <span id="globalErrorText"></span>
+    <button type="button" id="btnDismissGlobalError">✕</button>
+  </div>
   <div class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-brand">
@@ -420,7 +433,7 @@
 
   <!-- GAS 後端沒有 exceljs，Excel 解析改在瀏覽器端用 SheetJS 做，見 excelImport.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="excelImport.js"></script>
-  <script src="app.js"></script>
+  <script src="excelImport.js?v=20260907a"></script>
+  <script src="app.js?v=20260907a"></script>
 </body>
 </html>
