@@ -25,7 +25,17 @@ var _headerCache = {};
 function getSheet(name) {
   if (_sheetCache[name]) return _sheetCache[name];
   var sheet = getSpreadsheet().getSheetByName(name);
-  if (!sheet) throw new Error("找不到分頁「" + name + "」，請先執行 setupSheets()");
+  if (!sheet) {
+    // 【暫時診斷用】曾經在正式環境看過 name 變成 undefined 的執行紀錄，但目前
+    // 整個 gas/ 專案裡呼叫 getSheet/readRows/appendRow/updateRow/deleteRow/
+    // deleteRowsWhere 的地方全部都是寫死的字串分頁名稱，找不到會把變數誤當
+    // 分頁名稱傳進來的呼叫端。這裡記錄型別跟目前所有分頁名稱，只寫進 GAS
+    // 執行紀錄（不會回傳給前端），方便下次直接對照是不是有分頁名稱真的拼錯、
+    // 或是呼叫端傳進來的根本不是字串。問題確認解決後可以整段移除。
+    Logger.log("[getSheet] 找不到分頁，name=" + name + "（型別：" + typeof name + "），目前試算表裡的分頁：" +
+      getSpreadsheet().getSheets().map(function (s) { return s.getName(); }).join("、"));
+    throw new Error("找不到分頁「" + name + "」，請先執行 setupSheets()");
+  }
   _sheetCache[name] = sheet;
   return sheet;
 }
