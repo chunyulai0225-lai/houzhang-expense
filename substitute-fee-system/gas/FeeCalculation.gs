@@ -47,6 +47,22 @@ function isNonPayablePeriodCode(periodCode) {
   return Boolean(slot) && !toBool(slot.isTeachingPeriod);
 }
 
+// 后庄國小後續補充確認的業務規則：「導師時間」對一般老師不計代課鐘點費（沿用
+// isNonPayablePeriodCode 的全校預設），但培力班這 6 位老師的「導師時間」代課例外，
+// 需要正常計算一般代課鐘點費。判斷完全依「原教師」（record.originalTeacherId），
+// 不是依代課教師——跟代課教師是誰無關。目前只有這 6 個人，用姓名清單就足夠表達
+// 這個例外，不需要為此新增資料表或欄位（沿用既有 Persons 資料查姓名即可）；PeriodSlots
+// 的 isTeachingPeriod 維持全校預設 false，不能因為這個例外就整個改成 true。
+var HOMEROOM_TIME_BILLABLE_TEACHER_NAMES = {
+  "陳志平": true, "張珊華": true, "林慧玲": true, "林芳燕": true, "林芳竹": true, "游雅筑": true,
+};
+
+function isHomeroomTimeBillableForOriginalTeacher(originalTeacherId) {
+  if (!originalTeacherId) return false;
+  var person = findById("Persons", originalTeacherId);
+  return Boolean(person && HOMEROOM_TIME_BILLABLE_TEACHER_NAMES[person.name]);
+}
+
 // 對單一 SubstituteRecord 計算金額。
 function calculateSubstituteRecordFee(recordId, changedBy) {
   var record = findById("SubstituteRecords", recordId);
@@ -64,9 +80,11 @@ function calculateSubstituteRecordFee(recordId, changedBy) {
     };
   }
 
-  if (feeType === "SUBSTITUTE_PERIOD" && isNonPayablePeriodCode(record.periodCode)) {
-    // 導師時間／午休／早自修：非授課節次，不計一般代課鐘點費（不影響 OVERTIME_PERIOD
-    // 的計算路徑，也不影響第一～第七節既有的 Phase9-5 計算邏輯）。
+  var isHomeroomTimeException = record.periodCode === "HOMEROOM_TIME" && isHomeroomTimeBillableForOriginalTeacher(record.originalTeacherId);
+  if (feeType === "SUBSTITUTE_PERIOD" && isNonPayablePeriodCode(record.periodCode) && !isHomeroomTimeException) {
+    // 導師時間（一般老師）／午休／早自修：非授課節次，不計一般代課鐘點費（不影響
+    // OVERTIME_PERIOD 的計算路徑，也不影響第一～第七節既有的 Phase9-5 計算邏輯）。
+    // 培力班 6 位老師的導師時間例外會在上面被排除、繼續往下走正常計算流程。
     clearAmountIfNeeded(recordId, record);
     return {
       recordId: recordId, unitPrice: null, amount: null, feeRuleId: null,

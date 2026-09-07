@@ -69,11 +69,13 @@ function parseHoursOrDaysToPeriodCount(text) {
   return { error: true };
 }
 
-// 回傳三種結果之一：
-//   {periodCode}                                      —— 可以對應到系統既有的節次代碼
-//   {isSpecialPeriod: true, specialPeriodText: "..."} —— 辨識出是特殊節次（例如「導師時間」），
-//                                                        但不是既有的 P1~P7／早自修／午休
-//   {error}                                            —— 真的無法辨識
+// 回傳兩種結果之一：
+//   {periodCode}  —— 可以對應到系統既有的節次代碼（早自修／午休／導師時間／P1~P7）
+//   {error}        —— 真的無法辨識
+// 「導師時間」（HOMEROOM_TIME）已確認是系統既有的節次代碼之一，跟早自修／午休一樣
+// 一律辨識成功，不會因為原教師是誰而在這裡分岔——「導師時間是否計費」是原教師層級
+// 的例外（培力班 6 位老師），屬於 FeeCalculation.gs 的判斷範圍，不是節次解析的範圍
+// （見 FeeCalculation.gs 的 isHomeroomTimeBillableForOriginalTeacher()）。
 function parsePeriodText(text, validCodes) {
   var trimmed = String(text).trim();
   function check(code) {
@@ -81,9 +83,7 @@ function parsePeriodText(text, validCodes) {
   }
   if (trimmed === "早自修") return check("EARLY_STUDY");
   if (trimmed === "午休") return check("LUNCH");
-  // 「導師時間」是真實存在的節次文字，但不是既有 P1~P7 的其中一節，不能硬轉成某一節
-  // （代導師費規則尚未確認，見 FeeCalculation.gs 開頭說明——這裡故意不猜）。
-  if (trimmed === "導師時間") return { isSpecialPeriod: true, specialPeriodText: trimmed };
+  if (trimmed === "導師時間") return check("HOMEROOM_TIME");
   var match = trimmed.match(/^第([0-9一二三四五六七]+)節$/);
   if (match) {
     var raw = match[1];
@@ -177,15 +177,7 @@ function api_importSubstituteRows(payload) {
     var periodCode = null;
     if (row.periodText) {
       var pr = parsePeriodText(row.periodText, validPeriodCodes);
-      if (pr.isSpecialPeriod) {
-        // 「導師時間」這類特殊節次：保留原始文字，不硬轉成 P1~P7 的某一節，也不猜代課費
-        // （代導師費／日薪／半日薪的計算規則尚未確認）。原始資料照樣完整保留，只是
-        // 不建立 SubstituteRecord，記錄成「待確認」，等規則確認後再另外處理。
-        rowIssues.push({
-          rowNumber: row.rowNumber, fieldName: "節次",
-          message: '特殊節次／待確認："' + pr.specialPeriodText + '"：尚未確認對應的代課費計算規則，不會自動歸類到既有節次，暫不建立代課紀錄',
-        });
-      } else if (pr.error) {
+      if (pr.error) {
         rowIssues.push({ rowNumber: row.rowNumber, fieldName: "節次", message: pr.error });
       } else {
         periodCode = pr.periodCode;

@@ -171,7 +171,7 @@ describe("導師時間／午休：即使日期是區間，非計費規則仍然�
     expect(sandbox.isNonPayablePeriodCode("LUNCH")).toBe(true);
   });
 
-  it("導師時間＋日期區間：維持既有「特殊節次／待確認」行為，不建立 SubstituteRecord", () => {
+  it("導師時間＋日期區間：不會被時數天數擋下（HOMEROOM_TIME 不受此限，只有 P1~P7 需要時數天數），正常建立紀錄", () => {
     const sandbox = createGasSandbox();
     const semester = seedRealSemester115_1(sandbox);
     const result = importOneRow(sandbox, semester.id, {
@@ -179,9 +179,12 @@ describe("導師時間／午休：即使日期是區間，非計費規則仍然�
       dateText: "09-07(一) 07:50 ~ 09-11(五) 15:50", periodText: "導師時間",
       className: "1年1班", subject: "",
     });
-    expect(result.successCount).toBe(0);
+    expect(result.errorCount).toBe(0);
+    expect(result.successCount).toBe(1);
     const records = sandbox.readRows("SubstituteRecords").filter((r: any) => r.monthlyImportId === result.monthlyImport.id);
-    expect(records).toHaveLength(0);
-    expect(result.errors[0].message).toContain("特殊節次／待確認");
+    expect(records).toHaveLength(1);
+    expect(records[0].periodCode).toBe("HOMEROOM_TIME");
+    // 是否計費是原教師層級的例外（培力班 6 人），這裡的原教師「王老師」不在名單內，
+    // 完整的計費行為驗證見 tests/gas-homeroom-time-billable-teachers.test.ts。
   });
 });

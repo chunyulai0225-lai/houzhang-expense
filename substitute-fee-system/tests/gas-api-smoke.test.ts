@@ -71,11 +71,12 @@ describe("整合驗證：全部 10 個 .gs 檔案載入同一個執行環境後�
     expect(list.find((s: any) => s.id === sem.id)).toBeTruthy();
   });
 
-  it("listPeriodSlots 正常讀取（setupSheets 自動種好的 9 個節次代碼）", () => {
+  it("listPeriodSlots 正常讀取（setupSheets 自動種好的 10 個節次代碼，含後來補上的導師時間）", () => {
     const sandbox = createGasSandbox();
     const slots = sandbox.api_listPeriodSlots();
-    expect(slots.length).toBe(9);
+    expect(slots.length).toBe(10);
     expect(slots.map((s: any) => s.code)).toContain("P1");
+    expect(slots.map((s: any) => s.code)).toContain("HOMEROOM_TIME");
   });
 
   it("學期管理 5 個 API：create／update／setCurrent／deactivate／activate 都能正常執行到底", () => {

@@ -10,10 +10,12 @@
 // SUBSTITUTE_PERIOD 費用類型、且節次被標記為非授課節次時才擋下——不影響
 // OVERTIME_PERIOD 的計算路徑，也不影響第一～第七節既有的 Phase9-5 計算邏輯。
 //
-// 「導師時間」目前仍維持前一輪已確認的行為：辨識但不轉成 P1~P7、不建立
-// SubstituteRecord、保留 RawRecord 標記待確認（見 gas-import-edge-cases.test.ts）；
-// 這裡額外從「計算流程」角度再次確認：既然沒有 SubstituteRecord，自然也就
-// 不可能算出任何一般代課鐘點費。
+// 「導師時間」後來又確認過一次業務規則（見 tests/gas-homeroom-time-billable-teachers
+// .test.ts）：培力班 6 位老師的導師時間代課例外要計費，一般老師的導師時間仍然不計費。
+// 這裡（一般老師的情境）驗證的重點沒變：一般老師的導師時間即使建立了 SubstituteRecord
+// （現在「導師時間」是正式節次代碼 HOMEROOM_TIME，不再是待確認狀態），計費流程仍然
+// 會被 isNonPayablePeriodCode() 擋下，算不出任何一般代課鐘點費；培力班例外的完整
+// 測試在上面提到的專屬測試檔案。
 import { describe, expect, it } from "vitest";
 import { createGasSandbox, seedRealSemester115_1 } from "./helpers/gasHarness";
 
@@ -143,14 +145,19 @@ describe("完整流程：匯入 → 分類 → 計費，午休即使被分類為
   });
 });
 
-describe("導師時間：因為不會建立 SubstituteRecord，計費流程自然也不會產生任何一般代課鐘點費", () => {
-  it("匯入含「導師時間」的批次後，計費 API 找不到任何以此為節次的紀錄可以計算", () => {
+describe("導師時間（一般老師）：現在會建立 SubstituteRecord，但計費流程仍然擋下一般代課鐘點費", () => {
+  it("匯入含「導師時間」的批次：原教師是一般老師（不在培力班 6 人名單）時，正常建立紀錄但 amount 維持 null", () => {
     const sandbox = createGasSandbox();
     const semester = seedRealSemester115_1(sandbox);
     sandbox.api_createFeeRule({
       semesterId: semester.id, feeType: "SUBSTITUTE_PERIOD", amount: 165,
       effectiveDate: "2026-08-31", changedBy: "測試",
     });
+    var teacher = {
+      id: sandbox.newId(), name: "王老師", payrollCode: "", enrollmentStatus: "ACTIVE",
+      enrollDate: "", leaveDate: "", note: "", createdAt: sandbox.nowIso(), updatedAt: sandbox.nowIso(),
+    };
+    sandbox.appendRow("Persons", teacher);
 
     const rows = [
       {
@@ -163,14 +170,21 @@ describe("導師時間：因為不會建立 SubstituteRecord，計費流程自�
       sourceStaffType: "NON_BD", importedBy: "測試", rows, detectedHeaders: ["日期", "節次"],
     });
 
-    expect(result.successCount).toBe(0);
+    // 「導師時間」是正式節次代碼，不再是待確認、不建立紀錄的狀態。
+    expect(result.successCount).toBe(1);
     const records = sandbox.readRows("SubstituteRecords").filter((r: any) => r.monthlyImportId === result.monthlyImport.id);
-    expect(records).toHaveLength(0);
+    expect(records).toHaveLength(1);
+    expect(records[0].periodCode).toBe("HOMEROOM_TIME");
+    sandbox.updateRow("SubstituteRecords", records[0].id, { originalTeacherId: teacher.id, updatedAt: sandbox.nowIso() });
 
+    sandbox.api_classifyMonthlyImport({ id: result.monthlyImport.id, changedBy: "測試" });
     const feeResults = sandbox.api_calculateMonthlyImportFees({ id: result.monthlyImport.id, changedBy: "測試" });
-    expect(feeResults).toHaveLength(0);
+
+    expect(feeResults).toHaveLength(1);
+    expect(feeResults[0].amount).toBeNull();
+    expect(feeResults[0].skippedReason).toContain("非授課節次");
 
     const summary = sandbox.api_summarizeTeacherMonthlyFees({ monthlyImportIds: [result.monthlyImport.id] });
-    expect(summary).toHaveLength(0);
+    expect(summary).toHaveLength(0); // amount 為 null，彙總時本來就會被排除
   });
 });
