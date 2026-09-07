@@ -11,12 +11,25 @@
 var WEEKDAY_CHAR_MAP = { "一": "MON", "二": "TUE", "三": "WED", "四": "THU", "五": "FRI", "六": "SAT", "日": "SUN", "天": "SUN" };
 var CHINESE_DIGIT_MAP = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7 };
 var DATE_PATTERN = /^(\d{1,2})[-\/](\d{1,2})(?:\((一|二|三|四|五|六|日)\))?(?:\s*\d{1,2}:\d{2}\s*~\s*\d{1,2}:\d{2})?$/;
+// 真實 2026/09 資料出現的日期「區間」格式，例如「09-11(五) 12:00 ~ 09-14(一) 16:00」——
+// 前後各是一個完整的「MM-DD(星期) HH:mm」，中間用 ~ 連接。這跟 DATE_PATTERN 本來就支援的
+// 「單日 + 同一天的起訖時間」（例如「6/18(四) 13:50 ~ 15:50」）是兩種不同的格式，
+// 不能混在同一個 pattern 裡，也不能假設區間裡每一天都要另外展開成一筆代課紀錄
+// （SubstituteRecord 一筆只對應一天一節，展開等於是系統自己猜測實際代課日，不允許）。
+var DATE_RANGE_PATTERN =
+  /^\d{1,2}[-\/]\d{1,2}(?:\((一|二|三|四|五|六|日)\))?\s*\d{1,2}:\d{2}\s*~\s*\d{1,2}[-\/]\d{1,2}(?:\((一|二|三|四|五|六|日)\))?\s*\d{1,2}:\d{2}$/;
 
-// 回傳 {date, weekday, weekdayMismatch, monthMismatch} 或 {error}
+// 回傳三種結果之一：
+//   {date, weekday, weekdayMismatch, monthMismatch} —— 可以正常解析成單一天
+//   {isDateRange: true}                             —— 辨識出是日期「區間」，不是單一天
+//   {error}                                          —— 真的無法辨識
 function parseDateText(text, year, expectedMonth) {
   var trimmed = String(text).trim();
   var match = trimmed.match(DATE_PATTERN);
-  if (!match) return { error: '無法解析日期格式："' + text + '"，預期格式如 "06-18(四)" 或 "6/18(四) 13:50 ~ 15:50"' };
+  if (!match) {
+    if (DATE_RANGE_PATTERN.test(trimmed)) return { isDateRange: true };
+    return { error: '無法解析日期格式："' + text + '"，預期格式如 "06-18(四)" 或 "6/18(四) 13:50 ~ 15:50"' };
+  }
   var month = Number(match[1]);
   var day = Number(match[2]);
   if (month < 1 || month > 12) return { error: '日期月份不合理："' + text + '"' };
@@ -29,7 +42,11 @@ function parseDateText(text, year, expectedMonth) {
   return { date: date.toISOString().slice(0, 10), weekday: computedWeekday, weekdayMismatch: weekdayMismatch, monthMismatch: monthMismatch };
 }
 
-// 回傳 {periodCode} 或 {error}
+// 回傳三種結果之一：
+//   {periodCode}                                      —— 可以對應到系統既有的節次代碼
+//   {isSpecialPeriod: true, specialPeriodText: "..."} —— 辨識出是特殊節次（例如「導師時間」），
+//                                                        但不是既有的 P1~P7／早自修／午休
+//   {error}                                            —— 真的無法辨識
 function parsePeriodText(text, validCodes) {
   var trimmed = String(text).trim();
   function check(code) {
@@ -37,6 +54,9 @@ function parsePeriodText(text, validCodes) {
   }
   if (trimmed === "早自修") return check("EARLY_STUDY");
   if (trimmed === "午休") return check("LUNCH");
+  // 「導師時間」是真實存在的節次文字，但不是既有 P1~P7 的其中一節，不能硬轉成某一節
+  // （代導師費規則尚未確認，見 FeeCalculation.gs 開頭說明——這裡故意不猜）。
+  if (trimmed === "導師時間") return { isSpecialPeriod: true, specialPeriodText: trimmed };
   var match = trimmed.match(/^第([0-9一二三四五六七]+)節$/);
   if (match) {
     var raw = match[1];
@@ -117,14 +137,37 @@ function api_importSubstituteRows(payload) {
     var parsedDate = null;
     if (row.dateText) {
       var dr = parseDateText(row.dateText, Number(payload.year), Number(payload.month));
-      if (dr.error) rowIssues.push({ rowNumber: row.rowNumber, fieldName: "日期", message: dr.error });
-      else parsedDate = dr;
+      if (dr.isDateRange) {
+        // 日期是一個區間（例如「09-11(五) 12:00 ~ 09-14(一) 16:00」），不是無法解析——
+        // 但 SubstituteRecord 一筆只能對應一天一節，不能自己猜是哪一天、更不能展開成
+        // 區間內每一天都各建一筆。原始資料（RawRecord）照樣完整保留，只是不建立
+        // SubstituteRecord，並記錄成「待確認」，等管理者實際確認後改成單日日期重新登錄。
+        rowIssues.push({
+          rowNumber: row.rowNumber, fieldName: "日期",
+          message: '日期區間／待確認："' + row.dateText + '"：這是一個日期區間，不是單一天，系統不會自動判斷實際代課日、也不會展開成多筆紀錄，請人工確認實際日期後改用單日格式重新登錄',
+        });
+      } else if (dr.error) {
+        rowIssues.push({ rowNumber: row.rowNumber, fieldName: "日期", message: dr.error });
+      } else {
+        parsedDate = dr;
+      }
     }
     var periodCode = null;
     if (row.periodText) {
       var pr = parsePeriodText(row.periodText, validPeriodCodes);
-      if (pr.error) rowIssues.push({ rowNumber: row.rowNumber, fieldName: "節次", message: pr.error });
-      else periodCode = pr.periodCode;
+      if (pr.isSpecialPeriod) {
+        // 「導師時間」這類特殊節次：保留原始文字，不硬轉成 P1~P7 的某一節，也不猜代課費
+        // （代導師費／日薪／半日薪的計算規則尚未確認）。原始資料照樣完整保留，只是
+        // 不建立 SubstituteRecord，記錄成「待確認」，等規則確認後再另外處理。
+        rowIssues.push({
+          rowNumber: row.rowNumber, fieldName: "節次",
+          message: '特殊節次／待確認："' + pr.specialPeriodText + '"：尚未確認對應的代課費計算規則，不會自動歸類到既有節次，暫不建立代課紀錄',
+        });
+      } else if (pr.error) {
+        rowIssues.push({ rowNumber: row.rowNumber, fieldName: "節次", message: pr.error });
+      } else {
+        periodCode = pr.periodCode;
+      }
     }
 
     if (rowIssues.length > 0 || !parsedDate || !periodCode) {
