@@ -185,24 +185,36 @@
         <section id="tab-pendingIssues" class="tab-panel">
           <div class="filters">
             <select id="pendingPeriodSelect"></select>
+            <select id="pendingOriginalTeacherFilter"><option value="">原教師：全部</option></select>
+            <select id="pendingSubstituteTeacherFilter"><option value="">代課教師：全部</option></select>
+            <select id="pendingIssueTypeFilter"><option value="">問題類型：全部</option></select>
+            <select id="pendingPeriodCodeFilter"><option value="">節次：全部</option></select>
+            <button id="btnClearPendingFilters" class="secondary">清除篩選</button>
             <button id="btnRefreshPending">重新整理</button>
           </div>
           <div id="pendingSummaryLine" class="hint" style="font-size: 15px; font-weight: 700; color: var(--green-800);"></div>
+          <div class="panel" id="pendingTeacherSummaryPanel">
+            <div class="hint" style="font-weight: 700; margin-bottom: 8px;">依原教師彙總（點選只看該老師）</div>
+            <div id="pendingTeacherSummaryChips" class="chip-row"></div>
+          </div>
           <div class="subtabs" id="pendingFilterTabs">
             <button class="subtab-btn active" data-filter="ALL">全部</button>
             <button class="subtab-btn" data-filter="PENDING">⚠️ 待處理</button>
             <button class="subtab-btn" data-filter="ACKNOWLEDGED">✅ 已確認</button>
           </div>
           <div class="panel">
+            <div class="history-table-wrap">
             <table id="pendingIssuesTable">
               <thead>
                 <tr>
-                  <th>日期</th><th>原教師</th><th>代課教師</th><th>節次</th><th>班級</th><th>科目</th>
-                  <th>問題類型</th><th>問題說明</th><th>目前狀態</th><th>操作</th>
+                  <th>列號</th><th>日期</th><th>日期原文</th><th>原教師</th><th>代課教師</th>
+                  <th>節次原文</th><th>解析後節次</th><th>時數天數原文</th><th>班級</th><th>科目</th>
+                  <th>問題欄位</th><th>問題類型</th><th>問題說明</th><th>目前狀態</th><th>操作</th>
                 </tr>
               </thead>
               <tbody></tbody>
             </table>
+            </div>
           </div>
         </section>
 

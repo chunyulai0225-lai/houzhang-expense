@@ -307,11 +307,37 @@ function hydrateSelfFunded(r) {
 // ---------- 待處理工作區 ----------
 // 把「未配對教師」「規則衝突」「金額算不出來」「匯入錯誤」整合成一個清單，
 // 每一筆標示目前狀態：待處理 / 已確認接受（有 IssueAcknowledgement）。
+//
+// 可追蹤性補強：原本只有 IMPORT_ERROR 這一類完全沒有原教師／代課教師／日期／
+// 節次／時數天數等資訊（ImportErrors 分頁本身只存 rowNumber/fieldName/message，
+// 沒有存 rawRecordId），使用者只看得到「第34列｜時數天數｜時數天數／待確認…」，
+// 完全不知道是哪一位老師。這裡不新增資料表，直接用「同一個 monthlyImportId +
+// 同一個 rowNumber」去對照 RawRecords（RawRecords 本來就是每一列 Excel 無條件
+// 都會建立一筆，rowNumber 在同一個匯入批次裡不會重複，兩邊用這組複合鍵配對是
+// 可靠的），把原教師／代課教師／日期原文／節次原文／時數天數原文／rawRecordId
+// 補齊到每一種 issueType，讓使用者一眼就能看到是哪一位老師、也能追溯回原始
+// RawRecord。四種 issueType 現在共用同一組欄位形狀，不再是 IMPORT_ERROR 特別稀疏。
 
 function toAckInfo(targetTable, targetId) {
   var ack = getAcknowledgement(targetTable, targetId);
   if (!ack) return { status: "PENDING", acknowledgement: null };
   return { status: "ACKNOWLEDGED", acknowledgement: { reason: ack.reason, acknowledgedBy: ack.acknowledgedBy, acknowledgedAt: ack.acknowledgedAt } };
+}
+
+// 依「原教師」姓名分組計算彙總時使用的顯示名稱：完全比照 api_listPendingIssues
+// 每一筆 issue 的 originalTeacher 欄位（已配對的人員姓名，或原始 Excel 文字，
+// 或都沒有時的 null），一律代換成同一個「未知原教師」字樣，確保彙總結果的
+// key 跟畫面上顯示的內容完全一致。
+var UNKNOWN_ORIGINAL_TEACHER_LABEL = "未知原教師";
+
+// 把一筆 RawRecord 的「日期原文／節次原文／時數天數原文」補進 issue 物件裡，
+// 四種 issueType 共用同一份邏輯，不必各自重複寫一次。
+function attachRawRecordFields(issue, raw) {
+  issue.rawRecordId = raw ? raw.id : null;
+  issue.dateText = raw ? (raw.dateText || null) : null;
+  issue.periodText = raw ? (raw.periodText || null) : null;
+  issue.hoursOrDaysText = raw ? (raw.hoursOrDaysText || null) : null;
+  return issue;
 }
 
 function api_listPendingIssues(payload) {
@@ -326,6 +352,17 @@ function api_listPendingIssues(payload) {
   var batchIdSet = {};
   batchIds.forEach(function (id) { batchIdSet[id] = true; });
 
+  // RawRecords 索引：key 是「monthlyImportId::rowNumber」，同一批匯入裡 rowNumber
+  // 是 Excel 實際列號、彼此不重複，可以安全當唯一鍵使用，不需要另外存 rawRecordId
+  // 在 ImportErrors 上（不新增欄位）。
+  var rawByKey = {};
+  readRows("RawRecords").filter(function (r) { return batchIdSet[r.monthlyImportId]; }).forEach(function (r) {
+    rawByKey[r.monthlyImportId + "::" + String(r.rowNumber)] = r;
+  });
+
+  var validPeriodCodes = {};
+  readRows("PeriodSlots").forEach(function (p) { validPeriodCodes[p.code] = true; });
+
   var allRecords = readRows("SubstituteRecords").filter(function (r) { return batchIdSet[r.monthlyImportId] && r.entryType === "EXCEL_IMPORT"; });
   var teacherUnmatched = allRecords.filter(function (r) { return r.classificationMethod === "TEACHER_UNMATCHED"; });
   var conflict = allRecords.filter(function (r) { return r.classificationMethod === "CONFLICT"; });
@@ -339,50 +376,98 @@ function api_listPendingIssues(payload) {
   teacherUnmatched.forEach(function (r) {
     var raw = r.rawRecordId ? findById("RawRecords", r.rawRecordId) : null;
     var sub = getPersonRef(r.substituteTeacherId);
-    rows.push(Object.assign({
+    rows.push(Object.assign(attachRawRecordFields({
       issueType: "TEACHER_UNMATCHED", targetTable: "SubstituteRecord", targetId: r.id, date: r.date,
+      rowNumber: raw ? Number(raw.rowNumber) || null : null,
       originalTeacher: raw ? raw.originalTeacherText || null : null,
       substituteTeacher: sub ? sub.name : (raw ? raw.substituteTeacherText || null : null),
       periodCode: r.periodCode || null, className: r.className || null, subject: r.subject || null,
+      fieldName: "原教師",
       description: "原教師姓名尚未配對到人員資料，無法判斷分類規則",
-    }, toAckInfo("SubstituteRecord", r.id)));
+    }, raw), toAckInfo("SubstituteRecord", r.id)));
   });
 
   conflict.forEach(function (r) {
     var raw = r.rawRecordId ? findById("RawRecords", r.rawRecordId) : null;
     var orig = getPersonRef(r.originalTeacherId);
     var sub = getPersonRef(r.substituteTeacherId);
-    rows.push(Object.assign({
+    rows.push(Object.assign(attachRawRecordFields({
       issueType: "CONFLICT", targetTable: "SubstituteRecord", targetId: r.id, date: r.date,
+      rowNumber: raw ? Number(raw.rowNumber) || null : null,
       originalTeacher: orig ? orig.name : (raw ? raw.originalTeacherText || null : null),
       substituteTeacher: sub ? sub.name : (raw ? raw.substituteTeacherText || null : null),
       periodCode: r.periodCode || null, className: r.className || null, subject: r.subject || null,
+      fieldName: "分類規則",
       description: "同時符合多個規則，系統不會自動選一個，需要人工確認",
-    }, toAckInfo("SubstituteRecord", r.id)));
+    }, raw), toAckInfo("SubstituteRecord", r.id)));
   });
 
   amountMissing.forEach(function (r) {
     var raw = r.rawRecordId ? findById("RawRecords", r.rawRecordId) : null;
     var orig = getPersonRef(r.originalTeacherId);
     var sub = getPersonRef(r.substituteTeacherId);
-    rows.push(Object.assign({
+    // 「時數天數待確認」造成的金額缺漏（見 Import.gs 的 PERIOD_COUNT_PENDING_MARKER／
+    // FeeCalculation.gs 的 isPeriodCountPending）跟一般的「沒有費率可退回」是不同
+    // 原因，用 note 裡的標記分辨，說明文字要清楚指出是時數天數的問題，不是金額
+    // 或費率設定的問題。
+    var isPeriodCountPending = Boolean(r.note) && r.note.indexOf(PERIOD_COUNT_PENDING_MARKER) !== -1;
+    rows.push(Object.assign(attachRawRecordFields({
       issueType: "AMOUNT_MISSING", targetTable: "SubstituteRecord", targetId: r.id, date: r.date,
+      rowNumber: raw ? Number(raw.rowNumber) || null : null,
       originalTeacher: orig ? orig.name : (raw ? raw.originalTeacherText || null : null),
       substituteTeacher: sub ? sub.name : (raw ? raw.substituteTeacherText || null : null),
       periodCode: r.periodCode || null, className: r.className || null, subject: r.subject || null,
-      description: "已分類為" + r.fundingSource + "，但原始資料沒有金額、也找不到生效中的費率，無法計算",
-    }, toAckInfo("SubstituteRecord", r.id)));
+      fieldName: isPeriodCountPending ? "時數天數" : "金額",
+      description: isPeriodCountPending
+        ? "時數天數無法安全解析（原文：" + (raw ? '"' + (raw.hoursOrDaysText || "") + '"' : "未知") + "），計費數量待確認，暫不計算一般代課鐘點費"
+        : "已分類為" + r.fundingSource + "，但原始資料沒有金額、也找不到生效中的費率，無法計算",
+    }, raw), toAckInfo("SubstituteRecord", r.id)));
   });
 
   importErrors.forEach(function (e) {
-    rows.push(Object.assign({
+    var raw = rawByKey[e.monthlyImportId + "::" + String(e.rowNumber)] || null;
+    var resolvedPeriodCode = null;
+    if (raw && raw.periodText) {
+      var pr = parsePeriodText(raw.periodText, validPeriodCodes);
+      if (!pr.error) resolvedPeriodCode = pr.periodCode;
+    }
+    rows.push(Object.assign(attachRawRecordFields({
       issueType: "IMPORT_ERROR", targetTable: "MonthlyImportError", targetId: e.id, date: null,
-      originalTeacher: null, substituteTeacher: null, periodCode: null, className: null, subject: null,
+      rowNumber: Number(e.rowNumber) || null,
+      originalTeacher: raw ? (raw.originalTeacherText || null) : null,
+      substituteTeacher: raw ? (raw.substituteTeacherText || null) : null,
+      periodCode: resolvedPeriodCode, className: raw ? (raw.classText || null) : null, subject: raw ? (raw.subjectText || null) : null,
+      fieldName: e.fieldName || null,
       description: "第 " + (e.rowNumber || "?") + " 列" + (e.fieldName ? "（" + e.fieldName + "）" : "") + "：" + e.message,
-    }, toAckInfo("MonthlyImportError", e.id)));
+    }, raw), toAckInfo("MonthlyImportError", e.id)));
   });
 
+  // 篩選：原教師／代課教師／問題類型／節次，都只在有傳值時才套用，完全不影響
+  // 沒傳篩選條件時的既有回傳內容（一律回傳全部）。
+  if (payload.originalTeacher) rows = rows.filter(function (r) { return r.originalTeacher === payload.originalTeacher; });
+  if (payload.substituteTeacher) rows = rows.filter(function (r) { return r.substituteTeacher === payload.substituteTeacher; });
+  if (payload.issueType) rows = rows.filter(function (r) { return r.issueType === payload.issueType; });
+  if (payload.periodCode) rows = rows.filter(function (r) { return r.periodCode === payload.periodCode; });
+
   return rows;
+}
+
+// 依「原教師」彙總待處理問題筆數，供「待處理」頁面顯示「王○○：8筆」這種清單、
+// 點選後可以只看該老師的問題。直接彙總 api_listPendingIssues() 的結果，不重新
+// 查一次資料、不新增資料表；沒有原教師資訊的問題歸類到「未知原教師」，不會
+// 因為缺資料就整筆消失不計。
+function api_summarizePendingIssuesByOriginalTeacher(payload) {
+  var issues = api_listPendingIssues(payload);
+  var byTeacher = {};
+  var order = [];
+  issues.forEach(function (issue) {
+    var name = issue.originalTeacher || UNKNOWN_ORIGINAL_TEACHER_LABEL;
+    if (!byTeacher[name]) { byTeacher[name] = 0; order.push(name); }
+    byTeacher[name] += 1;
+  });
+  return order
+    .map(function (name) { return { originalTeacher: name, count: byTeacher[name] }; })
+    .sort(function (a, b) { return b.count - a.count || String(a.originalTeacher).localeCompare(String(b.originalTeacher), "zh-Hant"); });
 }
 
 // ---------- 月結首頁 ----------

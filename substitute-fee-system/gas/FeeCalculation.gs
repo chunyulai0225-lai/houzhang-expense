@@ -80,6 +80,20 @@ function calculateSubstituteRecordFee(recordId, changedBy) {
     };
   }
 
+  // 日期區間搭配第一節～第七節時，計費數量（periodCount）依「時數天數」判斷；
+  // 「時數天數」無法安全解析（例如「3日4時」）時，Import.gs 不會擋下這筆紀錄的
+  // 建立，而是在 note 留下 PERIOD_COUNT_PENDING_MARKER 標記——這裡在計費階段
+  // 依這個標記攔下，不猜測計費數量，不算一般代課鐘點費，同時清楚說明原因（不是
+  // fundingSource=UNDETERMINED，也不是非授課節次，是時數天數本身待確認）。
+  var isPeriodCountPending = Boolean(record.note) && record.note.indexOf(PERIOD_COUNT_PENDING_MARKER) !== -1;
+  if (feeType === "SUBSTITUTE_PERIOD" && isPeriodCountPending) {
+    clearAmountIfNeeded(recordId, record);
+    return {
+      recordId: recordId, unitPrice: null, amount: null, feeRuleId: null,
+      skippedReason: PERIOD_COUNT_PENDING_MARKER + "，計費數量尚未確認，暫不計算一般代課鐘點費（SUBSTITUTE_PERIOD）",
+    };
+  }
+
   var isHomeroomTimeException = record.periodCode === "HOMEROOM_TIME" && isHomeroomTimeBillableForOriginalTeacher(record.originalTeacherId);
   if (feeType === "SUBSTITUTE_PERIOD" && isNonPayablePeriodCode(record.periodCode) && !isHomeroomTimeException) {
     // 導師時間（一般老師）／午休／早自修：非授課節次，不計一般代課鐘點費（不影響

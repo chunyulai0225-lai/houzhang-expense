@@ -239,6 +239,17 @@ tr.ok-row { background: var(--green-50); }
 
 .history-table-wrap { overflow-x: auto; }
 
+/* ---------- 待處理：依原教師彙總的可點選籤 ---------- */
+.chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border: 1px solid var(--green-700); border-radius: 999px;
+  background: white; color: var(--green-700); font-size: 13px; cursor: pointer;
+}
+.chip:hover { background: var(--green-50, #f0f7f2); }
+.chip.active { background: var(--green-700); color: white; }
+.chip .chip-count { font-weight: 700; }
+
 /* ---------- 給出納 / 對帳 總額卡片 ---------- */
 
 .summary-strip { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
