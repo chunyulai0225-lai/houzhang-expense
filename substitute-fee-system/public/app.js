@@ -114,14 +114,28 @@ function getCurrentSemester() {
 // OPTIONS preflight——Apps Script Web App 沒有 doOptions()，沒辦法處理 preflight，
 // 這是唯一可行的繞法。所有 GET/POST/PATCH/DELETE 語意都靠 payload 裡的欄位表達，
 // 一律用同一個 doPost 進入點（見 gas/Router.gs）。
+//
+// 錯誤訊息刻意帶上 action 名稱、並針對兩種常見的「看起來像沒反應」情境給出明確
+// 提示：(1) fetch 本身失敗（網路／CORS／GAS 網址錯誤）；(2) 回應不是合法 JSON
+// （常見原因是 Apps Script 剛改過程式碼但還沒有「部署新版本」，Google 有時會回傳
+// 授權或錯誤頁面而不是 JSON）。這兩種情境都要清楚顯示原因，不能讓呼叫端只看到
+// 一個難以理解的例外、甚至完全無聲失敗。
 async function gasApi(action, payload) {
-  const res = await fetch(GAS_BASE_URL, {
-    method: "POST",
-    body: JSON.stringify({ action, payload: payload || {} }),
-  });
-  const body = await res.json().catch(() => ({ ok: false, error: `無法解析伺服器回應（${res.status}）` }));
+  let res;
+  try {
+    res = await fetch(GAS_BASE_URL, {
+      method: "POST",
+      body: JSON.stringify({ action, payload: payload || {} }),
+    });
+  } catch (err) {
+    throw new Error(`無法連線到後端服務（action=${action}）：${err.message}。請確認網路連線是否正常。`);
+  }
+  const body = await res.json().catch(() => ({
+    ok: false,
+    error: `伺服器回應不是預期的格式（HTTP ${res.status}，action=${action}）。若剛更新過 Apps Script 程式碼，請確認已經在「管理部署作業」重新部署新版本。`,
+  }));
   if (!body.ok) {
-    throw new Error(body.error || "請求失敗");
+    throw new Error(body.error || `請求失敗（action=${action}）`);
   }
   return body.data;
 }
@@ -129,11 +143,37 @@ async function gasApi(action, payload) {
 function qs(sel) { return document.querySelector(sel); }
 function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
 
+// 全域錯誤保護網：任何沒有被個別功能自己 catch 住的例外（同步例外、或沒接
+// .catch() 的 Promise），一律顯示在畫面最上方的紅色橫幅，確保使用者永遠看得到
+//「發生了什麼事」，不會出現「按了按鈕完全沒反應」這種無法診斷的情況。個別功能
+// 自己的 try/catch（例如刪除確認視窗裡的 showFormError）仍然優先顯示更精準的
+// 訊息，這裡只接住「漏網之魚」。
+function showGlobalError(message) {
+  const banner = qs("#globalErrorBanner");
+  if (!banner) { alert(message); return; }
+  qs("#globalErrorText").textContent = message;
+  banner.hidden = false;
+}
+function dismissGlobalError() {
+  const banner = qs("#globalErrorBanner");
+  if (banner) banner.hidden = true;
+}
+window.addEventListener("error", (e) => {
+  showGlobalError(`系統發生非預期錯誤：${e.error && e.error.message ? e.error.message : e.message}`);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const reason = e.reason;
+  const message = reason && reason.message ? reason.message : String(reason);
+  showGlobalError(`系統發生非預期錯誤：${message}`);
+});
+
 function dateOnly(iso) { return iso ? iso.slice(0, 10) : ""; }
 
 // ---------- 初始化 ----------
 
 async function init() {
+  qs("#btnDismissGlobalError").addEventListener("click", dismissGlobalError);
+
   qs("#changedByInput").value = state.changedBy;
   qs("#changedByInput").addEventListener("change", (e) => {
     state.changedBy = e.target.value.trim();
@@ -2330,4 +2370,4 @@ function renderReconciliation(result) {
     .join("");
 }
 
-init();
+init().catch((err) => showGlobalError(`初始化失敗：${err.message}`));
