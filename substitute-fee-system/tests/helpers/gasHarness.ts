@@ -99,6 +99,9 @@ class FakeSheet {
   getRange(row: number, col: number, numRows?: number, numCols?: number) {
     return new FakeRange(this, row, col, numRows || 1, numCols || 1, this.counters);
   }
+  getName() {
+    return this.name;
+  }
   getLastRow() {
     for (let r = this.data.length - 1; r >= 0; r--) {
       if (this.data[r] && this.data[r].some((v) => v !== undefined && v !== "")) return r + 1;

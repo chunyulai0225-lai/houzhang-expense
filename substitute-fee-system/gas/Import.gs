@@ -316,27 +316,47 @@ function api_getMonthlyImportDetail(payload) {
 // 刪除後這個批次的 id 在 MonthlyImports 裡已經找不到、自然不會再被查到，
 // 不會留下孤兒問題；已經刪除的 SubstituteRecord／ImportError 也不會再被任何
 // 其他 action 引用到（monthlyImportId 篩選一律是「現在還存在」的批次）。
+// 【暫時診斷用】曾經在正式環境出現過「getSheet() 收到 name=undefined」的錯誤，
+// 但把整條呼叫鏈裡每一個 getSheet/readRows/appendRow/updateRow/deleteRow/
+// deleteRowsWhere 的呼叫都重新核對過一次，全部都是寫死的字串分頁名稱
+// （"MonthlyImports"/"SubstituteRecords"/"ImportErrors"/"RawRecords"/
+// "IssueAcknowledgements"），這個函式本身沒有任何地方會把 monthlyImportId
+// 或其他變數誤當成分頁名稱傳進去。這裡先加上 Logger.log()，把 payload、
+// 找到的批次、以及每一步實際使用的分頁名稱都記下來，只寫進 GAS 執行紀錄
+// （Apps Script 編輯器的「執行項目」，不是回傳給前端的內容，不會外洩），
+// 下次若再發生，直接對照執行紀錄就能精確定位問題出在哪一行、哪一個分頁
+// 名稱變成了 undefined，不必再用猜的。等問題確認解決後可以整段拿掉。
 function api_deleteMonthlyImport(payload) {
+  Logger.log("[deleteMonthlyImport] 收到 payload=" + JSON.stringify(payload));
   requireField(payload, "id", "id");
-  var monthlyImport = findById("MonthlyImports", payload.id);
+  var monthlyImportId = payload.id;
+  Logger.log("[deleteMonthlyImport] monthlyImportId=" + monthlyImportId + "（型別：" + typeof monthlyImportId + "）");
+
+  var monthlyImport = findById("MonthlyImports", monthlyImportId);
   if (!monthlyImport) throw new Error("找不到匯入批次");
+  Logger.log("[deleteMonthlyImport] 找到批次：year=" + monthlyImport.year + " month=" + monthlyImport.month + " status=" + monthlyImport.status);
   assertMonthNotLocked(Number(monthlyImport.year), Number(monthlyImport.month));
 
   var substituteRecordIds = {};
-  readRows("SubstituteRecords").filter(function (r) { return r.monthlyImportId === payload.id; })
+  readRows("SubstituteRecords").filter(function (r) { return r.monthlyImportId === monthlyImportId; })
     .forEach(function (r) { substituteRecordIds[r.id] = true; });
   var importErrorIds = {};
-  readRows("ImportErrors").filter(function (e) { return e.monthlyImportId === payload.id; })
+  readRows("ImportErrors").filter(function (e) { return e.monthlyImportId === monthlyImportId; })
     .forEach(function (e) { importErrorIds[e.id] = true; });
 
+  Logger.log("[deleteMonthlyImport] 即將刪除 IssueAcknowledgements，分頁名稱=\"IssueAcknowledgements\"");
   var deletedAcknowledgements = deleteRowsWhere("IssueAcknowledgements", function (a) {
     return (a.targetTable === "SubstituteRecord" && substituteRecordIds[a.targetId]) ||
       (a.targetTable === "MonthlyImportError" && importErrorIds[a.targetId]);
   });
-  var deletedImportErrors = deleteRowsWhere("ImportErrors", function (e) { return e.monthlyImportId === payload.id; });
-  var deletedSubstituteRecords = deleteRowsWhere("SubstituteRecords", function (r) { return r.monthlyImportId === payload.id; });
-  var deletedRawRecords = deleteRowsWhere("RawRecords", function (r) { return r.monthlyImportId === payload.id; });
-  deleteRow("MonthlyImports", payload.id);
+  Logger.log("[deleteMonthlyImport] 即將刪除 ImportErrors，分頁名稱=\"ImportErrors\"");
+  var deletedImportErrors = deleteRowsWhere("ImportErrors", function (e) { return e.monthlyImportId === monthlyImportId; });
+  Logger.log("[deleteMonthlyImport] 即將刪除 SubstituteRecords，分頁名稱=\"SubstituteRecords\"");
+  var deletedSubstituteRecords = deleteRowsWhere("SubstituteRecords", function (r) { return r.monthlyImportId === monthlyImportId; });
+  Logger.log("[deleteMonthlyImport] 即將刪除 RawRecords，分頁名稱=\"RawRecords\"");
+  var deletedRawRecords = deleteRowsWhere("RawRecords", function (r) { return r.monthlyImportId === monthlyImportId; });
+  Logger.log("[deleteMonthlyImport] 即將刪除 MonthlyImports 本身，id=" + monthlyImportId);
+  deleteRow("MonthlyImports", monthlyImportId);
 
   writeChangeLog(
     "monthly_imports", payload.id, "status", monthlyImport.status, "DELETED", payload.changedBy,

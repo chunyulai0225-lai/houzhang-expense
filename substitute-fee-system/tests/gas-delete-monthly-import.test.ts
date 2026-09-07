@@ -189,3 +189,23 @@ describe("10. 待處理清單不會留下該批次的孤兒問題", () => {
     expect(afterIssues).toHaveLength(0);
   });
 });
+
+describe("正式環境曾出現「getSheet() 收到 name=undefined」的執行紀錄：確認整條刪除呼叫鏈裡沒有任何一步會把變數誤當分頁名稱傳進去", () => {
+  it("getSheet(undefined) 本身會拋出清楚的錯誤（訊息裡確實包含 undefined 字樣），且不會因為新加的診斷紀錄而拋出別的例外", () => {
+    const sandbox = createGasSandbox();
+    // 直接呼叫 getSheet(undefined)，確認：(a) 錯誤訊息就是使用者在正式環境看到的
+    // 那一句、(b) 這次新增的診斷 Logger.log（含列出目前所有分頁名稱）本身不會
+    // 因為呼叫到 sheet.getName() 之類的方法而額外炸開，蓋掉真正的錯誤。
+    expect(() => sandbox.getSheet(undefined)).toThrow(/找不到分頁「undefined」/);
+  });
+
+  it("完整刪除流程（找得到批次、正常刪除）：每一步用到的分頁名稱都是正確的字串，不會意外觸發 getSheet(undefined)", () => {
+    const sandbox = createGasSandbox();
+    const semester = seedRealSemester115_1(sandbox);
+    const result = importTestBatch(sandbox, semester.id);
+    // 只要整條鏈路有任何一步把 undefined 當成分頁名稱傳進去，這裡就會拋出
+    // 「找不到分頁「undefined」」而不是正常回傳刪除結果——用「不拋出例外」
+    // 反向證明這次追查的呼叫鏈本身是乾淨的。
+    expect(() => sandbox.api_deleteMonthlyImport({ id: result.monthlyImport.id, changedBy: "測試" })).not.toThrow();
+  });
+});

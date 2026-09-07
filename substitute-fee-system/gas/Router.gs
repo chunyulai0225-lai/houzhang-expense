@@ -105,6 +105,14 @@ function dispatch(action, payload) {
   if (!fn) throw new Error("未知的 action：" + action);
   payload = payload || {};
 
+  // 【暫時診斷用】追查 deleteMonthlyImport 曾出現的「getSheet(undefined)」錯誤，
+  // 先確認前端實際送到後端的 action 名稱、payload 內容跟預期一致（只記錄
+  // action/payload 到 GAS 執行紀錄，不會回傳給前端，也不是寫進試算表的資料，
+  // 沒有外洩風險）。確認問題解決後可以整段移除。
+  if (action === "deleteMonthlyImport") {
+    Logger.log("[dispatch] action=" + action + " payload=" + JSON.stringify(payload));
+  }
+
   if (READ_ONLY_ACTIONS[action]) {
     return fn(payload);
   }
