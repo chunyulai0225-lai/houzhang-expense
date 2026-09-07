@@ -90,6 +90,13 @@ const state = {
   chunaBatchIds: [],
   pendingFilter: "ALL",
   pendingIssuesCache: [],
+  // 待處理頁的四種下拉篩選＋依原教師彙總點選的篩選，全部是前端對已載入資料做
+  // 篩選（api_listPendingIssues 本身也支援同樣的參數，供直接呼叫 API 篩選用），
+  // 不需要每次篩選都重新打一次 API。
+  pendingOriginalTeacherFilter: "",
+  pendingSubstituteTeacherFilter: "",
+  pendingIssueTypeFilter: "",
+  pendingPeriodCodeFilter: "",
 };
 
 const FEE_TYPE_LABEL = {
@@ -168,6 +175,18 @@ async function init() {
       renderPendingIssues();
     })
   );
+
+  qs("#pendingOriginalTeacherFilter").addEventListener("change", (e) => { state.pendingOriginalTeacherFilter = e.target.value; renderPendingIssues(); });
+  qs("#pendingSubstituteTeacherFilter").addEventListener("change", (e) => { state.pendingSubstituteTeacherFilter = e.target.value; renderPendingIssues(); });
+  qs("#pendingIssueTypeFilter").addEventListener("change", (e) => { state.pendingIssueTypeFilter = e.target.value; renderPendingIssues(); });
+  qs("#pendingPeriodCodeFilter").addEventListener("change", (e) => { state.pendingPeriodCodeFilter = e.target.value; renderPendingIssues(); });
+  qs("#btnClearPendingFilters").addEventListener("click", () => {
+    state.pendingOriginalTeacherFilter = "";
+    state.pendingSubstituteTeacherFilter = "";
+    state.pendingIssueTypeFilter = "";
+    state.pendingPeriodCodeFilter = "";
+    renderPendingIssues();
+  });
 
   qs("#filterTeacher").addEventListener("input", debounce(loadWeeklyRules, 300));
   qs("#filterWeekday").addEventListener("change", loadWeeklyRules);
@@ -1788,15 +1807,94 @@ async function loadPendingIssues() {
   renderPendingIssues();
 }
 
+// 沒有配對到人員資料時，畫面上跟依原教師彙總都要用同一個占位字樣，
+// 不能一邊顯示空白、一邊顯示「未知原教師」，兩處對不起來會讓使用者以為是兩種情況。
+const UNKNOWN_TEACHER_LABEL = "（未知）";
+
+function pendingTeacherDisplayName(name) {
+  return name || UNKNOWN_TEACHER_LABEL;
+}
+
+// 依目前四個下拉篩選＋依原教師彙總點選的篩選，過濾出要顯示的問題清單。
+// 跟「全部／待處理／已確認」的狀態分頁篩選是分開的兩層：狀態分頁只影響
+// pendingFilter，這裡的四個欄位篩選可以跟狀態分頁同時套用。
+function applyPendingFieldFilters(list) {
+  return list.filter((r) => {
+    if (state.pendingOriginalTeacherFilter && pendingTeacherDisplayName(r.originalTeacher) !== state.pendingOriginalTeacherFilter) return false;
+    if (state.pendingSubstituteTeacherFilter && (r.substituteTeacher || "") !== state.pendingSubstituteTeacherFilter) return false;
+    if (state.pendingIssueTypeFilter && r.issueType !== state.pendingIssueTypeFilter) return false;
+    if (state.pendingPeriodCodeFilter && (r.periodCode || "") !== state.pendingPeriodCodeFilter) return false;
+    return true;
+  });
+}
+
+// 用目前實際載入的問題清單重建四個下拉篩選的選項（只列出真的有出現的值，
+// 不會出現「選了卻永遠沒有結果」的選項），並盡量保留使用者原本選取的值。
+function populatePendingFilterOptions(issues) {
+  const buildOptions = (selectEl, values, placeholder, currentValue) => {
+    const unique = Array.from(new Set(values)).sort((a, b) => String(a).localeCompare(String(b), "zh-Hant"));
+    selectEl.innerHTML =
+      `<option value="">${placeholder}</option>` + unique.map((v) => `<option value="${v}">${v}</option>`).join("");
+    selectEl.value = unique.includes(currentValue) ? currentValue : "";
+  };
+  buildOptions(qs("#pendingOriginalTeacherFilter"), issues.map((i) => pendingTeacherDisplayName(i.originalTeacher)), "原教師：全部", state.pendingOriginalTeacherFilter);
+  buildOptions(qs("#pendingSubstituteTeacherFilter"), issues.map((i) => i.substituteTeacher || UNKNOWN_TEACHER_LABEL), "代課教師：全部", state.pendingSubstituteTeacherFilter);
+  buildOptions(qs("#pendingIssueTypeFilter"), issues.map((i) => i.issueType), "問題類型：全部", state.pendingIssueTypeFilter);
+  buildOptions(qs("#pendingPeriodCodeFilter"), issues.filter((i) => i.periodCode).map((i) => i.periodCode), "節次：全部", state.pendingPeriodCodeFilter);
+  // 問題類型的選項用中文標籤顯示，但 value 仍是原始 issueType，方便直接比對。
+  qs("#pendingIssueTypeFilter").querySelectorAll("option[value]:not([value=''])").forEach((opt) => {
+    opt.textContent = PENDING_ISSUE_TYPE_LABEL[opt.value] || opt.value;
+  });
+}
+
+// 依「原教師」彙總目前（套用狀態分頁篩選之後、但不受四個欄位篩選影響）的問題筆數，
+// 呈現成「王○○：8筆」這種可點選的籤，點下去等同在原教師篩選選了同一個人。
+function renderPendingTeacherSummary(statusFilteredIssues) {
+  const counts = {};
+  const order = [];
+  statusFilteredIssues.forEach((r) => {
+    const name = pendingTeacherDisplayName(r.originalTeacher);
+    if (!(name in counts)) { counts[name] = 0; order.push(name); }
+    counts[name] += 1;
+  });
+  const sorted = order.slice().sort((a, b) => counts[b] - counts[a] || a.localeCompare(b, "zh-Hant"));
+
+  const container = qs("#pendingTeacherSummaryChips");
+  if (sorted.length === 0) {
+    container.innerHTML = `<span class="hint">目前沒有待處理事項可以彙總</span>`;
+    return;
+  }
+  container.innerHTML = sorted
+    .map((name) => {
+      const active = state.pendingOriginalTeacherFilter === name;
+      return `<button type="button" class="chip${active ? " active" : ""}" data-teacher="${name}">${name}：<span class="chip-count">${counts[name]}</span>筆</button>`;
+    })
+    .join("");
+  container.querySelectorAll(".chip").forEach((chip) =>
+    chip.addEventListener("click", () => {
+      const name = chip.dataset.teacher;
+      state.pendingOriginalTeacherFilter = state.pendingOriginalTeacherFilter === name ? "" : name;
+      renderPendingIssues();
+    })
+  );
+}
+
 function renderPendingIssues() {
   const issues = state.pendingIssuesCache;
   const pendingCount = issues.filter((i) => i.status === "PENDING").length;
   qs("#pendingSummaryLine").textContent =
     issues.length === 0 ? "本月目前沒有任何待處理事項" : `本月共有 ${issues.length} 件事項｜⚠️ 待處理 ${pendingCount} 件｜✅ 已確認 ${issues.length - pendingCount} 件`;
 
-  const visible = issues.filter((r) => state.pendingFilter === "ALL" || r.status === state.pendingFilter);
+  const statusFiltered = issues.filter((r) => state.pendingFilter === "ALL" || r.status === state.pendingFilter);
+  populatePendingFilterOptions(issues);
+  renderPendingTeacherSummary(statusFiltered);
+  const visible = applyPendingFieldFilters(statusFiltered);
 
   const tbody = qs("#pendingIssuesTable tbody");
+  if (visible.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="15" class="hint">沒有符合目前篩選條件的問題</td></tr>`;
+    return;
+  }
   tbody.innerHTML = visible
     .map((r) => {
       const idx = issues.indexOf(r);
@@ -1806,12 +1904,17 @@ function renderPendingIssues() {
           : badge("blocked", "⚠️ 待處理");
       return `
         <tr data-idx="${idx}" class="${r.status === "ACKNOWLEDGED" ? "" : "conflict-row"}">
+          <td>${r.rowNumber ?? ""}</td>
           <td>${r.date ?? ""}</td>
-          <td>${r.originalTeacher ?? ""}</td>
-          <td>${r.substituteTeacher ?? ""}</td>
+          <td>${r.dateText ?? ""}</td>
+          <td>${pendingTeacherDisplayName(r.originalTeacher)}</td>
+          <td>${r.substituteTeacher ?? UNKNOWN_TEACHER_LABEL}</td>
+          <td>${r.periodText ?? ""}</td>
           <td>${r.periodCode ?? ""}</td>
+          <td>${r.hoursOrDaysText ?? ""}</td>
           <td>${r.className ?? ""}</td>
           <td>${r.subject ?? ""}</td>
+          <td>${r.fieldName ?? ""}</td>
           <td>${PENDING_ISSUE_TYPE_LABEL[r.issueType] || r.issueType}</td>
           <td>${r.description}</td>
           <td>${statusText}</td>
