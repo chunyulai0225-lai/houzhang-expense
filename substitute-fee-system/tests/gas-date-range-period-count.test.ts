@@ -10,9 +10,11 @@
 //   2. 不會把日期區間展開成每天一筆的 SubstituteRecord（永遠只有一筆）。
 //   3. 有明確第一節～第七節、且「時數天數」能安全解析成純日數（例如「5日」）時，
 //      SubstituteRecord.periodCount 直接採用該數字，不是從日期區間自己算出天數。
-//   4. 「時數天數」無法安全解析（例如「3日4時」這種混合單位）時，保留 RawRecord、
-//      標記「時數天數／待確認」，不建立 SubstituteRecord——但這是時數天數的問題，
-//      不是日期區間的問題，訊息不能誤植成日期相關的錯誤。
+//   4. 「時數天數」無法安全解析（例如「3日4時」這種混合單位）時，也不阻止建立
+//      SubstituteRecord（RawRecord、SubstituteRecord 都完整保留），只是 periodCount
+//      留空、在 note 標記「時數天數待確認」，讓「待處理」清單／費用計算階段依這個
+//      標記處理，不會是 ImportError、也不會誤植成日期區間的問題（見
+//      tests/gas-pending-issues-tracking.test.ts 驗證「待處理」清單怎麼顯示這筆）。
 //   5. 單一日期的既有資料、以及導師時間／午休的既有規則，完全不受這次修改影響。
 import { describe, expect, it } from "vitest";
 import { createGasSandbox, seedRealSemester115_1 } from "./helpers/gasHarness";
@@ -108,8 +110,8 @@ describe("真實資料：詹庭瑜兩筆不同區間／天數，都不應因日�
   });
 });
 
-describe("真實資料：林家德 09-11~09-14、3日4時、第六節 → 日期區間不得直接造成 ImportError，但時數天數無法安全解析時暫不建立紀錄", () => {
-  it("RawRecord 完整保留、標記「時數天數／待確認」；不建立 SubstituteRecord；訊息不是日期區間的錯", () => {
+describe("真實資料：林家德 09-11~09-14、3日4時、第六節 → 日期區間不得造成 ImportError，時數天數無法安全解析也不阻止建立紀錄", () => {
+  it("RawRecord、SubstituteRecord 都完整保留，periodCount 留空、note 標記「時數天數待確認」，不產生任何 ImportError", () => {
     const sandbox = createGasSandbox();
     const semester = seedRealSemester115_1(sandbox);
     const result = importOneRow(sandbox, semester.id, {
@@ -118,8 +120,10 @@ describe("真實資料：林家德 09-11~09-14、3日4時、第六節 → 日期
       hoursOrDaysText: "3日4時", className: "3年1班", subject: "",
     });
 
-    expect(result.successCount).toBe(0);
-    expect(result.errorCount).toBe(1);
+    // 「時數天數」不需要在匯入階段解析，也不應該因為 3日4時 這種格式讓整筆資料消失。
+    expect(result.errorCount).toBe(0);
+    expect(result.successCount).toBe(1);
+    expect(result.errors).toHaveLength(0);
 
     const raw = sandbox.readRows("RawRecords").find((r: any) => r.monthlyImportId === result.monthlyImport.id);
     expect(raw).toBeTruthy();
@@ -127,14 +131,11 @@ describe("真實資料：林家德 09-11~09-14、3日4時、第六節 → 日期
     expect(raw.hoursOrDaysText).toBe("3日4時");
 
     const records = sandbox.readRows("SubstituteRecords").filter((r: any) => r.monthlyImportId === result.monthlyImport.id);
-    expect(records).toHaveLength(0);
-
-    const message = result.errors[0].message as string;
-    expect(message).toContain("時數天數／待確認");
-    expect(message).toContain("3日4時");
-    // 不可以誤植成日期區間本身的錯——日期區間不是這裡被擋下的原因。
-    expect(message).not.toContain("日期區間／待確認");
-    expect(message).not.toContain("無法解析日期格式");
+    expect(records).toHaveLength(1);
+    expect(records[0].periodCode).toBe("P6");
+    expect(records[0].periodCount).toBeNull(); // 計費數量待確認，不猜測
+    expect(records[0].note).toContain("時數天數待確認");
+    expect(records[0].note).toContain("3日4時");
   });
 });
 

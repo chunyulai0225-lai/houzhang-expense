@@ -57,6 +57,12 @@ function parseDateText(text, year, expectedMonth) {
   return parsed;
 }
 
+// 時數天數無法安全解析時，統一寫進 SubstituteRecords.note 的可辨識標記文字。
+// 「待處理」清單（MonthlyClose.gs 的 api_listPendingIssues）、費用計算（FeeCalculation.gs
+// 的 calculateSubstituteRecordFee）都用這個字串判斷「這筆紀錄的計費數量還沒確認」，
+// 不需要為此新增資料表或欄位——SubstituteRecords 本來就有 note 這個既有欄位可以用。
+var PERIOD_COUNT_PENDING_MARKER = "時數天數待確認";
+
 // 只認得「純日數」這種能安全、明確換算成一般代課節次計費數量的格式（例如「5日」
 // 「8日」「12日」）：時數天數是 N 天、搭配單一節次欄位，代表這個代課教師在請假／
 // 出差期間內每天都代同一節，共 N 次一般代課節次。混合單位（例如「3日4時」）或純
@@ -184,31 +190,31 @@ function api_importSubstituteRows(payload) {
       }
     }
 
-    // 日期是「區間」、且節次是第一節～第七節時，這筆紀錄的計費數量（periodCount）
-    // 一律依「時數天數」欄位判斷（例如「5日」→5 個一般代課節次），不會、也不能從
-    // 日期區間本身推算出天數。目前只認得純日數格式（見 parseHoursOrDaysToPeriodCount
-    // 開頭說明），無法安全解析時（缺漏、或像「3日4時」這種混合單位）不猜測，保留
-    // RawRecord、標記「時數天數／待確認」，暫不建立 SubstituteRecord——跟日期區間
-    // 本身無關，不可以誤植成日期相關的錯誤訊息。單一日期的既有資料完全不受影響
-    // （periodCount 維持原本的空白，2026/06 迴歸不受任何影響）。
-    var periodCount = null;
-    if (parsedDate && parsedDate.isDateRange && periodCode && /^P[1-7]$/.test(periodCode)) {
-      var hd = parseHoursOrDaysToPeriodCount(row.hoursOrDaysText);
-      if (hd.error) {
-        rowIssues.push({
-          rowNumber: row.rowNumber, fieldName: "時數天數",
-          message: '時數天數／待確認：日期為區間（"' + row.dateText + '"），節次「' + periodCode + '」需要明確的「時數天數」才能確認計費數量，' +
-            (row.hoursOrDaysText ? '目前的文字："' + row.hoursOrDaysText + '"' : "目前欄位是空的") +
-            "不是系統目前能安全辨識的格式（僅支援如「5日」這種純日數），暫不建立代課紀錄，請人工確認後改用可辨識的格式重新登錄",
-        });
-      } else {
-        periodCount = hd.periodCount;
-      }
-    }
-
     if (rowIssues.length > 0 || !parsedDate || !periodCode) {
       issues = issues.concat(rowIssues);
       return;
+    }
+
+    // 日期是「區間」、且節次是第一節～第七節時，這筆紀錄的計費數量（periodCount）
+    // 一律依「時數天數」欄位判斷（例如「5日」→5 個一般代課節次），不會、也不能從
+    // 日期區間本身推算出天數。目前只認得純日數格式（見 parseHoursOrDaysToPeriodCount
+    // 開頭說明）。無法安全解析時（缺漏、或像「3日4時」這種混合單位）不猜測——但這
+    // 不是「無法匯入」的錯誤，不阻止建立 RawRecord／SubstituteRecord（時數天數本來
+    // 就不需要在匯入階段解析完成），改成在 note 留下 PERIOD_COUNT_PENDING_MARKER
+    // 標記，讓「待處理」清單、費用計算階段可以依這個標記辨識、攔下一般代課鐘點費的
+    // 計算，不會讓原始資料消失，也不會誤植成日期相關的錯誤。單一日期的既有資料
+    // 完全不受影響（periodCount 維持原本的空白，2026/06 迴歸不受任何影響）。
+    var periodCount = null;
+    var periodCountPendingNote = null;
+    if (parsedDate.isDateRange && /^P[1-7]$/.test(periodCode)) {
+      var hd = parseHoursOrDaysToPeriodCount(row.hoursOrDaysText);
+      if (hd.error) {
+        periodCountPendingNote = PERIOD_COUNT_PENDING_MARKER + "：日期為區間（\"" + row.dateText + "\"），節次「" + periodCode + "」的時數天數原文" +
+          (row.hoursOrDaysText ? '："' + row.hoursOrDaysText + '"' : "是空的") +
+          "，不是系統目前能安全辨識的格式（僅支援如「5日」這種純日數），計費數量待確認，尚未計入一般代課鐘點費，請人工確認後補上正確格式";
+      } else {
+        periodCount = hd.periodCount;
+      }
     }
 
     var noteParts = [];
@@ -218,6 +224,7 @@ function api_importSubstituteRows(payload) {
       noteParts.push('日期原文為區間："' + row.dateText + '"，系統以區間起始日作為代課日期、不展開成多筆紀錄' +
         (periodCount !== null ? "；計費數量依時數天數設為 " + periodCount : ""));
     }
+    if (periodCountPendingNote) noteParts.push(periodCountPendingNote);
 
     recordRowsToInsert.push({
       id: newId(), rawRecordId: rawId, entryType: "EXCEL_IMPORT", monthlyImportId: monthlyImport.id,

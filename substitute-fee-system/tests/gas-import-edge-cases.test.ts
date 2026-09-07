@@ -120,8 +120,8 @@ describe("節次解析：「導師時間」是正式節次代碼（HOMEROOM_TIME
   });
 });
 
-describe("完整匯入流程：日期區間本身不會擋下建立，缺「時數天數」時是被時數天數擋下（不是日期區間的錯）", () => {
-  it("一批資料裡混合正常列、日期區間但缺時數天數的列：兩筆 RawRecord 都保留，正常列不受影響", () => {
+describe("完整匯入流程：日期區間本身不會擋下建立，缺「時數天數」也不會擋下、只是計費數量待確認", () => {
+  it("一批資料裡混合正常列、日期區間但缺時數天數的列：兩筆 RawRecord、兩筆 SubstituteRecord 都建立，不產生任何 ImportError", () => {
     const sandbox = createGasSandbox();
     const semester = seedRealSemester115_1(sandbox);
 
@@ -132,8 +132,9 @@ describe("完整匯入流程：日期區間本身不會擋下建立，缺「時�
       },
       {
         // 日期是區間、節次是第2節，但沒有「時數天數」可以確認計費數量——這種情況
-        // 不是被日期區間擋下，而是被「時數天數缺漏」擋下（見
-        // tests/gas-date-range-period-count.test.ts 驗證「有時數天數」時能正常建立）。
+        // 不會阻止建立 SubstituteRecord（時數天數不需要在匯入階段解析完成），只是
+        // periodCount 留空、note 標記「時數天數待確認」（見
+        // tests/gas-pending-issues-tracking.test.ts 驗證「待處理」清單怎麼顯示這筆）。
         rowNumber: 2, raw: {}, originalTeacherName: "王老師", substituteTeacherName: "陳老師",
         dateText: "09-11(五) 12:00 ~ 09-14(一) 16:00", periodText: "第2節", className: "1年1班", subject: "數學",
       },
@@ -145,24 +146,21 @@ describe("完整匯入流程：日期區間本身不會擋下建立，缺「時�
     });
 
     expect(result.totalCount).toBe(2);
-    expect(result.successCount).toBe(1);
-    expect(result.errorCount).toBe(1);
+    expect(result.successCount).toBe(2);
+    expect(result.errorCount).toBe(0);
+    expect(result.errors).toHaveLength(0);
 
     // RawRecords：兩筆都要在，完全不會因為日期區間而消失。
     const rawRecords = sandbox.readRows("RawRecords").filter((r: any) => r.monthlyImportId === result.monthlyImport.id);
     expect(rawRecords).toHaveLength(2);
 
-    // SubstituteRecords：只有第 1 列（正常日期＋正常節次）會建立。
+    // SubstituteRecords：兩列都會建立；第2列 periodCount 留空、note 標記待確認。
     const substituteRecords = sandbox.api_listSubstituteRecords({ id: result.monthlyImport.id });
-    expect(substituteRecords).toHaveLength(1);
-    expect(substituteRecords[0].date).toBe("2026-09-02");
-    expect(substituteRecords[0].periodCode).toBe("P1");
-
-    // ImportErrors：第2列要標示成「時數天數／待確認」（不是日期區間的錯，日期區間
-    // 本身不再是被擋下的原因），不能還是原本嚇人的「無法解析」字樣。
-    const messages = result.errors.map((e: any) => e.message);
-    expect(messages.some((m: string) => m.includes("時數天數／待確認") && m.includes("09-11(五) 12:00 ~ 09-14(一) 16:00"))).toBe(true);
-    expect(messages.some((m: string) => m.includes("日期區間／待確認"))).toBe(false);
-    expect(messages.some((m: string) => m.includes("無法解析日期格式"))).toBe(false);
+    expect(substituteRecords).toHaveLength(2);
+    const normalRecord = substituteRecords.find((r: any) => r.periodCode === "P1");
+    const pendingRecord = substituteRecords.find((r: any) => r.periodCode === "P2");
+    expect(normalRecord.date).toBe("2026-09-02");
+    expect(pendingRecord.periodCount).toBeNull();
+    expect(pendingRecord.note).toContain("時數天數待確認");
   });
 });

@@ -163,7 +163,7 @@ describe("10. 日期區間本身不再產生 ImportError", () => {
 });
 
 describe("11. 3日4時仍然標記為時數天數待確認", () => {
-  it("林家德 + 09-11~09-14 + 3日4時 + 第六節 → 標記「時數天數／待確認」，不建立 SubstituteRecord", () => {
+  it("林家德 + 09-11~09-14 + 3日4時 + 第六節 → 不產生 ImportError，SubstituteRecord 正常建立、note 標記「時數天數待確認」", () => {
     const sandbox = createGasSandbox();
     const semester = seedRealSemester115_1(sandbox);
     const result = sandbox.api_importSubstituteRows({
@@ -176,13 +176,15 @@ describe("11. 3日4時仍然標記為時數天數待確認", () => {
       }],
       detectedHeaders: ["日期", "節次", "時數天數"],
     });
-    expect(result.successCount).toBe(0);
-    expect(result.errorCount).toBe(1);
-    expect(result.errors[0].message).toContain("時數天數／待確認");
-    expect(result.errors[0].message).toContain("3日4時");
-    expect(result.errors[0].message).not.toContain("日期區間／待確認");
+    // 3日4時不是安全可解析的格式，但不應該讓整筆資料（RawRecord/SubstituteRecord）消失。
+    expect(result.errorCount).toBe(0);
+    expect(result.successCount).toBe(1);
     const records = sandbox.readRows("SubstituteRecords").filter((r: any) => r.monthlyImportId === result.monthlyImport.id);
-    expect(records).toHaveLength(0);
+    expect(records).toHaveLength(1);
+    expect(records[0].periodCode).toBe("P6");
+    expect(records[0].periodCount).toBeNull();
+    expect(records[0].note).toContain("時數天數待確認");
+    expect(records[0].note).toContain("3日4時");
   });
 });
 

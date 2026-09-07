@@ -79,6 +79,7 @@ var ACTIONS = {
   deleteSelfFunded: api_deleteSelfFunded,
   listSelfFunded: api_listSelfFunded,
   listPendingIssues: api_listPendingIssues,
+  summarizePendingIssuesByOriginalTeacher: api_summarizePendingIssuesByOriginalTeacher,
   getMonthlyDashboard: api_getMonthlyDashboard,
 
   // ---- Chuna / Reconciliation ----
@@ -94,8 +95,8 @@ var READ_ONLY_ACTIONS = {
   listCalendarDays: true, calendarSummary: true, listMonthlyImports: true, getMonthlyImportDetail: true,
   listSubstituteRecords: true, listUnmatchedTeacherReferences: true, listClassificationPreview: true,
   summarizeTeacherMonthlyFees: true, getMonthlyLockStatus: true, listAcknowledgements: true,
-  listSelfFunded: true, listPendingIssues: true, getMonthlyDashboard: true, getChunaSummary: true,
-  generateChunaExcel: true,
+  listSelfFunded: true, listPendingIssues: true, summarizePendingIssuesByOriginalTeacher: true,
+  getMonthlyDashboard: true, getChunaSummary: true, generateChunaExcel: true,
 };
 
 function dispatch(action, payload) {
