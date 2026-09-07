@@ -34,6 +34,19 @@ function clearAmountIfNeeded(recordId, record) {
   }
 }
 
+// 后庄國小正式作息表已確認：115-1 只有「第一節～第七節」是會產生一般代課鐘點費
+// （SUBSTITUTE_PERIOD）的授課節次；導師時間／午休／早自修等節次即使出現在請假／
+// 代課資料、且被分類為 GENERAL 或 PROJECT，也一律不計算一般代課鐘點費。這裡完全
+// 依賴 PeriodSlots.isTeachingPeriod 這個既有欄位（早自修／午休原本就是 false，
+// P1~P7 原本就是 true，不需要新增欄位或重新設計資料模型）——只在明確找到對應節次
+// 設定、且被標記為非授課節次時才擋下；找不到對應設定時完全不影響既有判斷流程。
+// 代導師若日後另外訂出專屬費用規則，屬於未來另外處理的範圍，這裡不自行推導。
+function isNonPayablePeriodCode(periodCode) {
+  if (!periodCode) return false;
+  var slot = findOne("PeriodSlots", function (p) { return p.code === periodCode; });
+  return Boolean(slot) && !toBool(slot.isTeachingPeriod);
+}
+
 // 對單一 SubstituteRecord 計算金額。
 function calculateSubstituteRecordFee(recordId, changedBy) {
   var record = findById("SubstituteRecords", recordId);
@@ -48,6 +61,16 @@ function calculateSubstituteRecordFee(recordId, changedBy) {
     return {
       recordId: recordId, unitPrice: null, amount: null, feeRuleId: null,
       skippedReason: "fundingSource=" + record.fundingSource + " 不在 Phase9 第一階段計算範圍",
+    };
+  }
+
+  if (feeType === "SUBSTITUTE_PERIOD" && isNonPayablePeriodCode(record.periodCode)) {
+    // 導師時間／午休／早自修：非授課節次，不計一般代課鐘點費（不影響 OVERTIME_PERIOD
+    // 的計算路徑，也不影響第一～第七節既有的 Phase9-5 計算邏輯）。
+    clearAmountIfNeeded(recordId, record);
+    return {
+      recordId: recordId, unitPrice: null, amount: null, feeRuleId: null,
+      skippedReason: "節次「" + record.periodCode + "」為非授課節次（導師時間／午休／早自修等），依后庄國小作息表規定不計一般代課鐘點費（SUBSTITUTE_PERIOD）",
     };
   }
 
