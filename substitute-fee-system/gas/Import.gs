@@ -294,6 +294,63 @@ function api_getMonthlyImportDetail(payload) {
   return hydrated;
 }
 
+// 刪除一個匯入批次：開發／測試期間累積很多測試匯入資料，需要能整批清掉，
+// 不提供單列刪除（RawRecord／SubstituteRecord 一律以 MonthlyImport 為刪除單位，
+// 避免刪出「只刪了一部分列、批次統計數字對不起來」的半殘資料）。
+//
+// 安全限制：只檢查「該匯入批次所屬的 (年,月) 是否已鎖定」——這就是既有月結
+// 機制對「是否已經被正式使用」的判斷依據，鎖定之後任何修改（含刪除）一律
+// 透過 assertMonthNotLocked() 擋下，不必另外發明一套「正式資料」判斷邏輯；
+// ACTIVE／SUPERSEDED 狀態本身不影響能不能刪，兩者都一樣受鎖定保護、也一樣
+// 只要沒鎖定就可以刪除（SUPERSEDED 批次常常就是使用者說的「重新匯入、蓋掉的
+// 舊測試批次」，正是這個刪除功能主要要清的對象）。
+//
+// 刪除範圍：ImportErrors／SubstituteRecords／RawRecords（用 monthlyImportId
+// 篩選，只會刪到這個批次自己的資料）、以及指向這些即將被刪除的 SubstituteRecord／
+// MonthlyImportError 的 IssueAcknowledgements（避免留下指向不存在資料的孤兒
+// 確認紀錄）。Persons／Semesters／PeriodSlots／WeeklyRules／DateRules／Projects／
+// FeeRules／MonthlyLocks／ChangeLog 完全不會被動到——ChangeLog 是稽核紀錄，
+// 這裡只會「新增」一筆記錄這次刪除的事實，不會刪除既有的稽核歷史。
+//
+// 「待處理」清單（api_listPendingIssues）本來就只查詢 status=ACTIVE 的批次，
+// 刪除後這個批次的 id 在 MonthlyImports 裡已經找不到、自然不會再被查到，
+// 不會留下孤兒問題；已經刪除的 SubstituteRecord／ImportError 也不會再被任何
+// 其他 action 引用到（monthlyImportId 篩選一律是「現在還存在」的批次）。
+function api_deleteMonthlyImport(payload) {
+  requireField(payload, "id", "id");
+  var monthlyImport = findById("MonthlyImports", payload.id);
+  if (!monthlyImport) throw new Error("找不到匯入批次");
+  assertMonthNotLocked(Number(monthlyImport.year), Number(monthlyImport.month));
+
+  var substituteRecordIds = {};
+  readRows("SubstituteRecords").filter(function (r) { return r.monthlyImportId === payload.id; })
+    .forEach(function (r) { substituteRecordIds[r.id] = true; });
+  var importErrorIds = {};
+  readRows("ImportErrors").filter(function (e) { return e.monthlyImportId === payload.id; })
+    .forEach(function (e) { importErrorIds[e.id] = true; });
+
+  var deletedAcknowledgements = deleteRowsWhere("IssueAcknowledgements", function (a) {
+    return (a.targetTable === "SubstituteRecord" && substituteRecordIds[a.targetId]) ||
+      (a.targetTable === "MonthlyImportError" && importErrorIds[a.targetId]);
+  });
+  var deletedImportErrors = deleteRowsWhere("ImportErrors", function (e) { return e.monthlyImportId === payload.id; });
+  var deletedSubstituteRecords = deleteRowsWhere("SubstituteRecords", function (r) { return r.monthlyImportId === payload.id; });
+  var deletedRawRecords = deleteRowsWhere("RawRecords", function (r) { return r.monthlyImportId === payload.id; });
+  deleteRow("MonthlyImports", payload.id);
+
+  writeChangeLog(
+    "monthly_imports", payload.id, "status", monthlyImport.status, "DELETED", payload.changedBy,
+    "刪除匯入批次（" + monthlyImport.year + "年" + monthlyImport.month + "月，檔案：" + (monthlyImport.fileName || "無檔名") +
+      "，共 " + monthlyImport.totalCount + " 筆）：連同 RawRecords " + deletedRawRecords + " 筆、SubstituteRecords " +
+      deletedSubstituteRecords + " 筆、ImportErrors " + deletedImportErrors + " 筆、IssueAcknowledgements " + deletedAcknowledgements + " 筆一併刪除"
+  );
+
+  return {
+    id: payload.id, deletedRawRecords: deletedRawRecords, deletedSubstituteRecords: deletedSubstituteRecords,
+    deletedImportErrors: deletedImportErrors, deletedAcknowledgements: deletedAcknowledgements,
+  };
+}
+
 function api_listSubstituteRecords(payload) {
   requireField(payload, "id", "id");
   var rows = readRows("SubstituteRecords").filter(function (r) { return r.monthlyImportId === payload.id; });

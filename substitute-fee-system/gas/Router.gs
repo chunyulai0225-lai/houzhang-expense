@@ -51,6 +51,7 @@ var ACTIONS = {
   importSubstituteRows: api_importSubstituteRows,
   listMonthlyImports: api_listMonthlyImports,
   getMonthlyImportDetail: api_getMonthlyImportDetail,
+  deleteMonthlyImport: api_deleteMonthlyImport,
   listSubstituteRecords: api_listSubstituteRecords,
   listUnmatchedTeacherReferences: api_listUnmatchedTeacherReferences,
   resolveTeacherReference: api_resolveTeacherReference,

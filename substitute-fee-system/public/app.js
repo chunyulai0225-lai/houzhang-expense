@@ -84,6 +84,7 @@ const state = {
   importFile: null, // 步驟一選擇的檔案（File 物件），步驟二直接複用，不用重新選檔
   importWorkbook: null, // 步驟一用 SheetJS 讀出來的 workbook，步驟二直接複用，不用重新讀檔
   currentImportId: null,
+  currentImportMeta: null, // { id, fileName, year, month, totalCount }，供「刪除此匯入批次」確認視窗使用
   classificationBatchId: null,
   feeCalcPeriod: null, // { year, month }
   closePeriod: null, // { year, month }，月結首頁／待處理／自費代課／給出納／對帳共用
@@ -227,6 +228,10 @@ async function init() {
 
   qs("#btnInspectFile").addEventListener("click", inspectImportFile);
   qs("#btnUploadImport").addEventListener("click", uploadImportFile);
+  qs("#btnDeleteCurrentImport").addEventListener("click", () => {
+    if (!state.currentImportMeta) return;
+    openDeleteImportConfirm(state.currentImportMeta);
+  });
   qs("#btnAutoApplyMatches").addEventListener("click", async () => {
     if (!state.currentImportId) return;
     const result = await gasApi("autoApplyUnambiguousTeacherMatches", { id: state.currentImportId, changedBy: state.changedBy || undefined });
@@ -1155,6 +1160,13 @@ function renderImportResult(result) {
     `檔案：${result.monthlyImport.fileName}｜總筆數 ${result.totalCount}｜成功 ${result.successCount}｜錯誤 ${result.errorCount}${supersededNote}`;
   qs("#importDetectedHeaders").textContent = `偵測到的欄位：${(result.detectedHeaders || []).join("、")}`;
 
+  // 記住目前畫面上顯示的這個批次的完整資訊，供「刪除此匯入批次」的確認視窗使用
+  // （不論是剛上傳完的批次，還是從下面歷史清單點「查看」叫出來的舊批次）。
+  state.currentImportMeta = {
+    id: result.monthlyImport.id, fileName: result.monthlyImport.fileName,
+    year: result.monthlyImport.year, month: result.monthlyImport.month, totalCount: result.totalCount,
+  };
+
   const errorTable = qs("#importErrorTable");
   const errorRows = result.errors || [];
   if (errorRows.length > 0) {
@@ -1223,6 +1235,7 @@ async function loadImportBatches() {
         <td>${b.errorCount}</td>
         <td>${b.status === "ACTIVE" ? badge("ok", "🟢 生效中") : badge("idle", "⚪ 已取代")}</td>
         <td><button data-id="${b.id}" data-action="view">查看</button></td>
+        <td><button class="danger" data-id="${b.id}" data-year="${b.year}" data-month="${b.month}" data-filename="${b.fileName}" data-total="${b.totalCount}" data-action="delete">🗑️ 刪除</button></td>
       </tr>`
     )
     .join("");
@@ -1244,6 +1257,52 @@ async function loadImportBatches() {
       await loadUnmatchedForImport(detail.id);
     })
   );
+
+  tbody.querySelectorAll("button[data-action='delete']").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      openDeleteImportConfirm({
+        id: btn.dataset.id, fileName: btn.dataset.filename,
+        year: Number(btn.dataset.year), month: Number(btn.dataset.month), totalCount: Number(btn.dataset.total),
+      });
+    })
+  );
+}
+
+// 刪除匯入批次前一定要先跳確認視窗，清楚告知檔案名稱／年月／匯入筆數，
+// 以及「刪除後無法復原」——這是刪掉一整批 RawRecords/SubstituteRecords/
+// ImportErrors 的操作，不能讓使用者手滑一按就沒了。
+function openDeleteImportConfirm(meta) {
+  const body = `
+    <h2>刪除此匯入批次</h2>
+    <p class="conflict-banner">
+      ⚠️ 確定要刪除這個匯入批次嗎？<br>
+      檔案名稱：${meta.fileName || "（無檔名）"}<br>
+      年月：${meta.year}年${meta.month}月<br>
+      匯入筆數：${meta.totalCount}<br>
+      <strong>刪除後無法復原</strong>，包含這個批次底下所有原始資料列、代課紀錄、匯入錯誤紀錄都會一併刪除。
+    </p>
+    <p class="hint">已鎖定月份的批次無法刪除（會由系統擋下）；建議只刪除開發／測試期間累積的測試匯入批次。</p>
+    <div class="error-text" id="f-error" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="f-cancel">取消</button>
+      <button type="button" class="danger" id="f-submit">確定刪除</button>
+    </div>`;
+  showModal(body);
+  qs("#f-cancel").addEventListener("click", closeModal);
+  qs("#f-submit").addEventListener("click", async () => {
+    try {
+      await gasApi("deleteMonthlyImport", { id: meta.id, changedBy: state.changedBy || undefined });
+      closeModal();
+      if (state.currentImportId === meta.id) {
+        state.currentImportId = null;
+        state.currentImportMeta = null;
+        qs("#importResult").hidden = true;
+      }
+      await loadImportBatches();
+    } catch (err) {
+      showFormError(err.message);
+    }
+  });
 }
 
 // ---------- Phase 8：分類預覽 ----------

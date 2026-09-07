@@ -114,6 +114,18 @@ function deleteRow(name, id) {
   return true;
 }
 
+// 依條件批次刪除多筆列（例如「刪除某個匯入批次底下所有 RawRecords」）。
+// 一定要照 __row 由大到小刪除——刪掉一列之後，後面所有列都會往上移一位，
+// 由小到大刪會刪到錯的列；readRows() 本來就會附上 __row，這裡不用另外查一次。
+// 回傳實際刪除的筆數。
+function deleteRowsWhere(name, predicate) {
+  var sheet = getSheet(name);
+  var rows = readRows(name).filter(predicate);
+  rows.sort(function (a, b) { return b.__row - a.__row; });
+  rows.forEach(function (r) { sheet.deleteRow(r.__row); });
+  return rows.length;
+}
+
 // 批次新增（匯入用，逐列 appendRow 在 200~300 列時仍偏慢，改用一次性 setValues）。
 function appendRows(name, objs) {
   if (objs.length === 0) return;
