@@ -153,6 +153,12 @@ table button.danger { background: var(--danger); }
 table button.danger:hover { background: #c14435; }
 table button.secondary-btn { background: var(--gray-400); }
 
+.btn-danger {
+  padding: 7px 14px; border: none; border-radius: 5px; background: var(--danger); color: white;
+  cursor: pointer; font-size: 13px; margin: 8px 0;
+}
+.btn-danger:hover { background: #c14435; }
+
 .panel {
   background: var(--white);
   border: 1px solid var(--gray-200);
@@ -309,6 +315,8 @@ tr.ok-row { background: var(--green-50); }
 .modal-actions button { padding: 8px 16px; border: none; border-radius: 5px; background: var(--green-700); color: white; cursor: pointer; }
 .modal-actions button:hover { background: var(--green-600); }
 .modal-actions button.secondary { background: var(--gray-400); }
+.modal-actions button.danger { background: var(--danger); }
+.modal-actions button.danger:hover { background: #c14435; }
 .error-text { color: var(--danger); font-size: 12px; margin-top: 6px; }
 
 /* ---------- 響應式：平板／手機 ---------- */
