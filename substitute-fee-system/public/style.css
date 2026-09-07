@@ -1,6 +1,20 @@
 /* 代課費管理系統：行政系統風格，綠色主題。
    目標是清楚、穩重、乾淨、好操作，長時間使用不疲勞——不是展示型網站。 */
 
+/* 全域錯誤橫幅：任何沒有被個別功能自己 catch 住的例外都會顯示在這裡（見
+   app.js 的 window.onerror / unhandledrejection），確保「按了沒反應」一定會
+   有畫面上看得到的線索，不會是無法診斷的黑箱。 */
+.global-error-banner {
+  position: sticky; top: 0; z-index: 999;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--danger); color: white; padding: 10px 16px; font-size: 13px;
+}
+.global-error-banner button {
+  background: transparent; border: 1px solid rgba(255,255,255,0.6); color: white;
+  border-radius: 4px; padding: 2px 10px; cursor: pointer; font-size: 13px;
+}
+.global-error-banner button:hover { background: rgba(255,255,255,0.15); }
+
 :root {
   --green-900: #12261c;
   --green-800: #163b2c;
