@@ -144,6 +144,7 @@ function setupSheets() {
   });
 
   seedPeriodSlotsIfEmpty();
+  ensurePeriodSlotExists("HOMEROOM_TIME", "導師時間", 0, false);
   seedBdClassificationRulesIfEmpty();
 
   Logger.log("setupSheets 完成，共 " + Object.keys(SHEET_SCHEMAS).length + " 個分頁。");
@@ -156,6 +157,7 @@ function seedPeriodSlotsIfEmpty() {
   var rows = readRows("PeriodSlots");
   if (rows.length > 0) return;
   var defs = [
+    { code: "HOMEROOM_TIME", displayName: "導師時間", sortOrder: 0, isTeachingPeriod: false },
     { code: "EARLY_STUDY", displayName: "早自修", sortOrder: 1, isTeachingPeriod: false },
     { code: "P1", displayName: "第1節", sortOrder: 2, isTeachingPeriod: true },
     { code: "P2", displayName: "第2節", sortOrder: 3, isTeachingPeriod: true },
@@ -171,6 +173,22 @@ function seedPeriodSlotsIfEmpty() {
       id: newId(), code: d.code, displayName: d.displayName, sortOrder: d.sortOrder,
       isTeachingPeriod: d.isTeachingPeriod, createdAt: nowIso(), updatedAt: nowIso(),
     });
+  });
+}
+
+// 補齊單一個 PeriodSlot（例如「導師時間」）：只在系統裡完全找不到這個代碼時才新增，
+// 不影響任何既有列（既有的 isTeachingPeriod 設定、sortOrder 都不會被覆蓋）。這是給
+// 「已經跑過 seedPeriodSlotsIfEmpty()、PeriodSlots 分頁已經有資料」的既有正式環境用的
+// 補丁機制——「導師時間」是後來才確認需要成為正式節次代碼，不能假設所有環境都是
+// 全新安裝（seedPeriodSlotsIfEmpty 只在完全空白時才會執行）。isTeachingPeriod 預設
+// false：一般老師的導師時間不計代課鐘點費，跟午休/早自修一致；培力班 6 位老師的
+// 例外由 FeeCalculation.gs 依原教師另外判斷，不會、也不應該改動這裡的全校預設值。
+function ensurePeriodSlotExists(code, displayName, sortOrder, isTeachingPeriod) {
+  var existing = findOne("PeriodSlots", function (p) { return p.code === code; });
+  if (existing) return;
+  appendRow("PeriodSlots", {
+    id: newId(), code: code, displayName: displayName, sortOrder: sortOrder,
+    isTeachingPeriod: isTeachingPeriod, createdAt: nowIso(), updatedAt: nowIso(),
   });
 }
 
