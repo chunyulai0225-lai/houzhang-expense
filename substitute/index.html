@@ -9,7 +9,7 @@
      舊版、按了沒反應」。用 ?v= 版本號手動 cache-busting：每次 app.js 或 style.css
      內容有變動時，把下面所有 ?v= 的值一起更新（例如今天的日期＋序號），確保瀏覽器
      一定會重新抓取，不要只改其中一個檔案的版本號。 -->
-<link rel="stylesheet" href="style.css?v=20260907a" />
+<link rel="stylesheet" href="style.css?v=20260909a" />
 </head>
 <body>
   <!-- 任何按鈕點了「完全沒反應」通常是某個未預期的例外被瀏覽器默默吞掉，
@@ -433,7 +433,7 @@
 
   <!-- GAS 後端沒有 exceljs，Excel 解析改在瀏覽器端用 SheetJS 做，見 excelImport.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="excelImport.js?v=20260907a"></script>
-  <script src="app.js?v=20260907a"></script>
+  <script src="excelImport.js?v=20260909a"></script>
+  <script src="app.js?v=20260909a"></script>
 </body>
 </html>

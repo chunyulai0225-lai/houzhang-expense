@@ -1329,7 +1329,12 @@ function openDeleteImportConfirm(meta) {
     </div>`;
   showModal(body);
   qs("#f-cancel").addEventListener("click", closeModal);
-  qs("#f-submit").addEventListener("click", async () => {
+  // GAS 這個 action 需要一點網路來回時間才會回應，按鈕原本完全沒有 disabled／文字
+  // 變化，使用者在等待期間很容易誤以為沒反應而重複點擊，導致同一個確認視窗送出
+  // 兩次一模一樣的 deleteMonthlyImport 請求（其中一次會因為批次已被刪除而失敗，
+  // 但失敗訊息可能寫進已經被另一次成功關閉的視窗，使用者完全看不到）。這裡跟其他
+  // 表單一樣改用既有的 withBusyButton()，送出期間鎖住按鈕，不新增其他機制。
+  qs("#f-submit").addEventListener("click", (e) => withBusyButton(e.target, "刪除中…", async () => {
     try {
       await gasApi("deleteMonthlyImport", { id: meta.id, changedBy: state.changedBy || undefined });
       closeModal();
@@ -1342,7 +1347,7 @@ function openDeleteImportConfirm(meta) {
     } catch (err) {
       showFormError(err.message);
     }
-  });
+  }));
 }
 
 // ---------- Phase 8：分類預覽 ----------
